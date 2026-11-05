@@ -1,0 +1,2923 @@
+<!doctype html>
+<html lang="en" data-mode="play"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>My Bubble Cam game</title>
+<style>
+/* ==========================================================================
+   BUBBLE CAM — Phase 2
+   Phase 1: камера + MediaPipe + трекинг пальца + пузыри (сохранено без правок логики)
+   Phase 2: свои картинки объектов, контент раундов, звуки, финальные эффекты,
+            панель настройки, структура проекта с сохранением/загрузкой.
+   Один файл. Для GitHub Pages переименовать в index.html.
+   ========================================================================== */
+/* ---------- ПАЛИТРА ----------
+   Светлая бежевая тема везде: страница, игровые экраны, HUD и редактор.
+   Выбранное и активное подсвечивается светлой оливой.
+   Цвет самих игровых объектов живёт в проекте и настраивается учителем. */
+:root{
+  --bg:#f7f1e2;           /* бежевый фон */
+  --bg-2:#ede3cb;
+  --surface:#fffdf5;      /* панели и карточки */
+  --ink:#343a20;          /* основной текст — тёмная олива */
+  --muted:#6f7749;        /* подписи, подсказки */
+  --olive:#93a35f;        /* акцент */
+  --olive-deep:#67733c;
+  --olive-soft:rgba(147,163,95,.26);   /* заливка выбранного */
+  --gold:#b98a1c;         /* очки */
+  --rust:#b4502c;         /* ошибка, жизни */
+  --line:rgba(99,109,60,.3);
+  --shadow:0 .5em 1.6em rgba(88,82,54,.18);
+  --r:1.1em; color-scheme:light;
+}
+
+/* редактор наследует ту же палитру, чуть светлее фоном */
+#editor{
+  --ed-bg:linear-gradient(180deg,#fbf6ea,#f1e9d6);
+  --ed-text:var(--ink);
+  --ed-soft:var(--muted);
+  --ed-line:var(--line);
+  --ed-field:var(--surface);
+  --ed-sub:rgba(255,255,255,.62);
+  --ed-accent:var(--olive-deep);
+  --ed-accent-soft:var(--olive-soft);
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  background:radial-gradient(120% 90% at 50% 0%,#fdf8ec 0%,var(--bg) 55%,var(--bg-2) 100%);
+  color:var(--ink);
+  font-family:"Nunito","Segoe UI",system-ui,-apple-system,sans-serif;
+  overflow:hidden;
+  -webkit-tap-highlight-color:transparent;
+}
+h1,h2,h3{font-family:"Baloo 2","Nunito",system-ui,sans-serif;font-weight:700;letter-spacing:.01em}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--olive-deep);outline-offset:3px}
+
+/* ---------- СЦЕНА ---------- */
+#stage{position:fixed;inset:0;overflow:hidden;padding-top:env(safe-area-inset-top,0px)}
+#cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);
+  opacity:0;transition:opacity .5s ease;background:#efe8d6}
+#cam.live{opacity:1}
+/* никакой заливки поверх видео — только мягкое затемнение по краям,
+   и то лишь если учитель его попросил ползунком */
+#veil{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse 78% 72% at 50% 50%,
+    rgba(34,36,21,0) 32%, rgba(34,36,21,calc(var(--vig,.25) * .5)) 70%, rgba(34,36,21,var(--vig,.25)) 100%)}
+#canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+#fxCanvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:30}
+/* во время предпросмотра из редактора холст эффектов поднимается над панелью */
+#fxCanvas.above{z-index:50}
+
+/* ---------- HUD ---------- */
+#hud{position:absolute;left:0;right:0;top:0;z-index:5;
+  padding:calc(.9em + env(safe-area-inset-top,0px)) 1.1em .9em;
+  display:flex;align-items:flex-start;gap:1em;pointer-events:none}
+/* колонки делят ширину поровну ради центровки середины,
+   но сами плашки остаются по размеру содержимого, а не тянутся на всю колонку */
+#hud .side{display:flex;flex-direction:column;gap:.35em;min-width:8.5em;flex:1 1 0;
+  align-items:flex-start}
+#hud .side.right{align-items:flex-end;text-align:right}
+#hud .mid{flex:0 1 auto;text-align:center;min-width:0}
+.chip{display:inline-flex;align-items:center;gap:.4em;background:rgba(255,253,245,.88);
+  border:1px solid var(--line);border-radius:999px;padding:.3em .85em;font-weight:700;
+  font-size:clamp(.85rem,2.2vw,1.05rem);backdrop-filter:blur(6px);box-shadow:var(--shadow)}
+.chip.score{color:var(--gold);min-width:7.5em}
+.chip.time.low{color:var(--rust);border-color:rgba(180,80,44,.55)}
+.hearts{display:flex;gap:.22em;font-size:clamp(1rem,2.6vw,1.35rem);line-height:1;color:var(--rust)}
+.heart{filter:drop-shadow(0 1px 2px rgba(255,255,255,.7))}
+img.heart{width:1.25em;height:1.25em;object-fit:contain;display:block}
+.heart.gone{opacity:.25;filter:grayscale(1)}
+#question{display:inline-block;max-width:min(80vw,34ch);font-family:"Baloo 2","Nunito",sans-serif;
+  font-weight:700;font-size:clamp(1.05rem,3.6vw,1.9rem);line-height:1.2;
+  background:rgba(255,253,245,.92);color:var(--ink);border:1px solid var(--line);
+  border-radius:var(--r);padding:.35em .9em;backdrop-filter:blur(6px);box-shadow:var(--shadow)}
+/* block + auto-поля: своя строка под названием, ширина по содержимому, по центру */
+#progress{display:block;width:fit-content;margin:.4em auto 0;font-size:clamp(.72rem,1.9vw,.88rem);font-weight:700;
+  color:var(--muted);background:rgba(255,253,245,.88);border:1px solid var(--line);
+  border-radius:999px;padding:.22em .9em;backdrop-filter:blur(6px);box-shadow:var(--shadow)}
+#hudButtons{display:flex;gap:.45em;pointer-events:auto}
+.icon-btn{width:2.5em;height:2.5em;display:grid;place-items:center;border-radius:.8em;
+  background:rgba(255,253,245,.9);border:1px solid var(--line);color:var(--olive-deep);
+  font-size:clamp(.85rem,2.2vw,1rem);transition:background .15s ease,transform .15s ease}
+.icon-btn:hover{background:var(--olive-soft)}
+.icon-btn:active{transform:scale(.94)}
+.icon-btn svg{width:1.15em;height:1.15em;fill:none;stroke:currentColor;stroke-width:2.1;
+  stroke-linecap:round;stroke-linejoin:round}
+
+/* ---------- ЭКРАНЫ ---------- */
+.screen{position:absolute;inset:0;display:grid;place-items:center;padding:1.5em;z-index:20;
+  background:rgba(247,241,226,.9);backdrop-filter:blur(10px)}
+.screen[hidden]{display:none}
+.card{width:min(560px,100%);max-height:100%;overflow:auto;
+  background:linear-gradient(170deg,var(--surface),#f3ecda);
+  border:1px solid var(--line);border-radius:1.4em;padding:clamp(1.3em,4vw,2.2em);
+  box-shadow:var(--shadow);text-align:center}
+.card h1{margin:0 0 .15em;font-size:clamp(2rem,7vw,3.1rem);line-height:1;color:var(--olive-deep)}
+.card h2{margin:0 0 .5em;font-size:clamp(1.4rem,5vw,2.1rem);color:var(--olive-deep)}
+.lede{margin:0 auto 1.4em;max-width:46ch;color:var(--muted);line-height:1.55;font-size:clamp(.95rem,2.6vw,1.05rem)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5em;padding:.72em 1.5em;
+  border-radius:999px;font-weight:700;font-size:clamp(1rem,3vw,1.15rem);
+  background:linear-gradient(180deg,#9aaa64,var(--olive-deep));color:#fdfaef;
+  box-shadow:0 .35em 1em rgba(103,115,60,.35);transition:transform .15s ease,box-shadow .15s ease}
+.btn:hover{transform:translateY(-2px)}
+.btn:active{transform:translateY(0)}
+.btn.ghost{background:rgba(255,255,255,.6);border:1.5px solid var(--line);color:var(--olive-deep);box-shadow:none}
+.btn.ghost:hover{background:var(--olive-soft)}
+.btn.small{padding:.42em .9em;font-size:.9rem}
+.btn[disabled]{opacity:.55;pointer-events:none}
+.btn-row{display:flex;flex-wrap:wrap;gap:.7em;justify-content:center;margin-top:.4em}
+.howto{display:grid;gap:.7em;text-align:left;margin:0 0 1.5em;padding:0;list-style:none;color:var(--ink)}
+.howto li{display:flex;gap:.7em;align-items:flex-start;line-height:1.45}
+.howto .bead{flex:0 0 auto;width:1.7em;height:1.7em;border-radius:50%;display:grid;place-items:center;
+  font-weight:700;font-size:.85em;background:var(--olive-soft);border:1px solid var(--line);color:var(--olive-deep)}
+#status{min-height:1.4em;margin-top:1em;font-size:.92rem;color:var(--muted)}
+#status.error{color:var(--rust);font-weight:600}
+.stats{display:flex;justify-content:center;gap:1.6em;margin:1.2em 0 1.6em;flex-wrap:wrap}
+.stat{min-width:5.5em}
+.stat b{display:block;font-family:"Baloo 2",sans-serif;font-size:clamp(1.8rem,6vw,2.6rem);line-height:1;color:var(--gold)}
+.stat span{font-size:.85rem;color:var(--muted)}
+.spinner{width:2.4em;height:2.4em;margin:0 auto 1em;border-radius:50%;
+  border:3px solid var(--olive-soft);border-top-color:var(--olive-deep);animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(1turn)}}
+
+/* ---------- РЕДАКТОР (светлая бежево-оливковая тема) ---------- */
+#editor{position:absolute;inset:0;z-index:40;display:flex;flex-direction:column;
+  background:var(--ed-bg);color:var(--ed-text)}
+#editor[hidden]{display:none}
+#edTop{display:flex;align-items:center;gap:.6em;padding:.7em .9em;border-bottom:1px solid var(--ed-line);
+  flex-wrap:wrap;background:rgba(255,255,255,.4)}
+.edLogo{font-family:"Baloo 2",sans-serif;font-weight:700;font-size:1.1rem;color:var(--ed-accent)}
+#projName{flex:1;min-width:9em;padding:.45em .7em;border-radius:.6em;background:var(--ed-field);
+  border:1px solid var(--ed-line);color:var(--ed-text);font:inherit;font-weight:700}
+#saveState{font-size:.76rem;color:var(--ed-soft);white-space:nowrap}
+#saveState.bad{color:#b4502c;font-weight:700}
+
+/* кнопки внутри редактора — оливковые на светлом */
+#editor .btn{background:linear-gradient(180deg,#8d9c56,#606d38);color:#fdfaef;
+  box-shadow:0 .3em .9em rgba(79,89,44,.3)}
+#editor .btn.ghost{background:rgba(255,255,255,.55);border:1.5px solid var(--ed-line);
+  color:var(--ed-accent);box-shadow:none}
+#editor .btn.ghost:hover{background:rgba(147,163,95,.2)}
+#editor .icon-btn{background:rgba(255,255,255,.6);border:1px solid var(--ed-line);color:var(--ed-accent)}
+#editor .icon-btn:hover{background:rgba(147,163,95,.25)}
+
+#edBody{flex:1;min-height:0;display:grid;grid-template-columns:7.5em minmax(20em,1.1fr) 1fr}
+#edNav{display:flex;flex-direction:column;gap:.25em;padding:.7em .45em;border-right:1px solid var(--ed-line);
+  overflow:auto;background:rgba(255,255,255,.3)}
+#edNav button{display:flex;flex-direction:column;align-items:center;gap:.25em;padding:.6em .3em;
+  border-radius:.7em;font-size:.72rem;font-weight:700;color:var(--ed-soft);text-align:center;line-height:1.2;
+  border:1px solid transparent}
+#edNav button .ico{font-size:1.25rem;line-height:1}
+#edNav button:hover{background:rgba(255,255,255,.5)}
+#edNav button.on{background:var(--ed-accent-soft);border-color:rgba(99,109,60,.45);color:var(--ed-accent)}
+#edPanes{overflow:auto;padding:1em 1.1em 3em;border-right:1px solid var(--ed-line)}
+.pane[hidden]{display:none}
+#edPreview{display:flex;flex-direction:column;padding:1em;min-width:0;overflow:auto;
+  background:rgba(255,255,255,.22)}
+.pvHead{text-align:center;margin:0 0 .6em}
+#pvQuestion{display:inline-block;font-family:"Baloo 2",sans-serif;font-weight:700;font-size:1.05rem;
+  background:var(--surface);color:var(--ink);border:1px solid var(--ed-line);
+  border-radius:.8em;padding:.3em .8em}
+#livePreview{flex:1;min-height:220px;width:100%;border-radius:1em;border:1px solid var(--ed-line);
+  background:radial-gradient(ellipse 80% 75% at 50% 50%,#f3efdd 30%,#d9d7bb 100%)}
+
+/* ---------- ОБЩИЕ ЭЛЕМЕНТЫ ФОРМ (живут только внутри редактора) ---------- */
+.fld{margin:0 0 .95em}
+.fld>label{display:block;font-size:.82rem;font-weight:700;color:var(--ed-soft);margin:0 0 .3em}
+.fld input[type=text],.fld input[type=number],.fld select,.fld textarea,
+.item input[type=text],.item select,textarea.bulk{
+  width:100%;padding:.5em .65em;border-radius:.6em;background:var(--ed-field);
+  border:1px solid var(--ed-line);color:var(--ed-text);font:inherit;font-size:.92rem}
+textarea.bulk{min-height:5.5em;resize:vertical;font-size:.88rem;line-height:1.5}
+.fld input[type=range]{width:100%;accent-color:var(--ed-accent)}
+.row{display:flex;gap:.5em;align-items:center}
+.row>*{min-width:0}
+.row.wrap{flex-wrap:wrap}
+.hint{font-size:.78rem;color:var(--ed-soft);margin:.25em 0 0;line-height:1.45}
+.hint code{background:rgba(99,109,60,.14);padding:.05em .3em;border-radius:.3em}
+.switchrow{display:flex;align-items:center;gap:.55em;margin:0 0 .7em;font-size:.92rem;font-weight:600}
+.switchrow input{width:1.15em;height:1.15em;accent-color:var(--ed-accent)}
+.sub{border:1px solid var(--ed-line);border-radius:.9em;padding:.85em;margin:0 0 .9em;background:var(--ed-sub)}
+.sub>h4{margin:0 0 .7em;font-size:.95rem;font-family:"Baloo 2",sans-serif;color:var(--ed-accent)}
+details.sub>summary{cursor:pointer;font-size:.95rem;font-family:"Baloo 2",sans-serif;list-style:revert}
+details.sub>summary::marker{color:var(--ed-accent)}
+.chips{display:flex;flex-wrap:wrap;gap:.4em;margin:0 0 .8em}
+.chips button{padding:.38em .75em;border-radius:999px;font-size:.82rem;font-weight:700;
+  border:1px solid var(--ed-line);color:var(--ed-soft);background:rgba(255,255,255,.55)}
+.chips button:hover{background:rgba(147,163,95,.18)}
+.chips button.on{background:var(--ed-accent-soft);border-color:var(--ed-accent);color:var(--ed-accent)}
+.chips button.add{border-style:dashed}
+.filebtn{position:relative;overflow:hidden;display:inline-flex}
+.filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:10em}
+.thumb{width:3em;height:3em;border-radius:.5em;object-fit:contain;background:rgba(99,109,60,.1);
+  border:1px solid var(--ed-line);flex:0 0 auto}
+.item{border:1px solid var(--ed-line);border-radius:.8em;padding:.6em;margin:0 0 .55em;
+  background:rgba(255,255,255,.45)}
+.item .top{display:flex;gap:.45em;align-items:center}
+.item .top input[type=text]{flex:1}
+.item .ok{display:flex;align-items:center;gap:.3em;font-size:.78rem;font-weight:700;color:var(--ed-soft);white-space:nowrap}
+.item .ok input{accent-color:#c79a2c;width:1.05em;height:1.05em}
+.item.right{border-color:rgba(199,154,44,.55);background:rgba(227,181,68,.13)}
+.iconx{width:1.9em;height:1.9em;border-radius:.45em;border:1px solid var(--ed-line);display:grid;
+  place-items:center;color:var(--ed-soft);flex:0 0 auto;background:rgba(255,255,255,.5)}
+.iconx:hover{color:#b4502c;border-color:#b4502c}
+.tbl{width:100%;border-collapse:collapse;font-size:.78rem;margin:.6em 0 0}
+.tbl th,.tbl td{border:1px solid var(--ed-line);padding:.3em .45em;text-align:left;vertical-align:top}
+.tbl th{color:var(--ed-soft)}
+.bad{color:#b4502c;font-weight:700}
+.good{color:var(--ed-accent);font-weight:700}
+@media (max-width:860px){
+  #edBody{grid-template-columns:1fr;grid-template-rows:auto auto 1fr;overflow:auto}
+  #edNav{flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--ed-line);
+    justify-content:center}
+  #edNav button{flex-direction:row;gap:.4em;padding:.45em .7em}
+  #edPanes{border-right:0;max-height:none;overflow:visible;padding-bottom:1.5em}
+  #edPreview{border-top:1px solid var(--ed-line)}
+  #livePreview{min-height:200px}
+}
+.emo{width:2.1em;height:2.1em;border-radius:.5em;border:1px solid var(--ed-line);
+  background:rgba(255,255,255,.6);flex:0 0 auto;font-size:.95rem;line-height:1}
+.emo:hover{background:var(--olive-soft)}
+#emojiPicker{position:absolute;z-index:70;width:min(360px,92vw);max-height:340px;overflow:auto;
+  background:var(--surface);border:1px solid var(--line);border-radius:.9em;
+  padding:.7em;box-shadow:0 .8em 2em rgba(88,82,54,.28)}
+#emojiPicker[hidden]{display:none}
+#emojiGroups{margin:0 0 .5em;position:sticky;top:-.7em;background:var(--surface);padding:.1em 0 .3em;z-index:1}
+#emojiGroups button{padding:.25em .6em;font-size:.76rem}
+#emojiGrid{display:grid;grid-template-columns:repeat(9,1fr);gap:.12em}
+#emojiGrid button{font-size:1.35rem;line-height:1;padding:.18em 0;border-radius:.4em}
+#emojiGrid button:hover{background:var(--olive-soft)}
+#toast{position:absolute;left:50%;bottom:1.4em;transform:translateX(-50%);z-index:60;
+  background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:999px;
+  padding:.55em 1.2em;font-size:.9rem;font-weight:600;box-shadow:var(--shadow);opacity:0;
+  transition:opacity .25s ease;pointer-events:none;max-width:90vw;text-align:center}
+#toast.show{opacity:1}
+@media (max-width:520px){ #panel{width:100%} }
+@media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&amp;family=Nunito:wght@400;600;700&amp;display=swap"></head>
+<body>
+<div id="stage" style="--vig: 0.25;">
+  <video id="cam" playsinline="" muted="" autoplay=""></video>
+  <div id="veil"></div>
+  <canvas id="canvas" width="3470" height="2228" style="cursor: default;"></canvas>
+  <canvas id="fxCanvas" width="3470" height="2228"></canvas>
+
+  <div id="hud" hidden="">
+    <div class="side">
+      <span class="chip score">★ <span id="scoreVal">0</span></span>
+      <span class="hearts" id="hearts" aria-label="Lives"><span class="heart">❤️</span><span class="heart">❤️</span><span class="heart">❤️</span><span class="heart gone">❤️</span><span class="heart gone">❤️</span></span>
+    </div>
+    <div class="mid">
+      <span id="question">Pop the words with a sound "Ss"</span>
+      <span id="progress">Popped  0 / 2</span>
+    </div>
+    <div class="side right">
+      <span class="chip time" id="timeChip">⏱ <span id="timeVal">84</span></span>
+      <div id="hudButtons">
+        <button class="icon-btn" id="btnPause" title="Pause" aria-label="Pause"><svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"></path></svg></button>
+        <button class="icon-btn" id="btnFull" title="Fullscreen" aria-label="Fullscreen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path></svg></button>
+        <button class="icon-btn" id="btnExit" title="Exit" aria-label="Exit"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <section class="screen" id="menuScreen">
+    <div class="card">
+      <h1>Bubble Cam</h1>
+      <p class="lede">Lift your hand in front of the camera and touch the right answer with your fingertip.</p>
+      <ul class="howto">
+        <li><span class="bead">1</span><span>Allow camera access when the browser asks.</span></li>
+        <li><span class="bead">2</span><span>Stand about an arm's length away, with your hand in the light.</span></li>
+        <li><span class="bead">3</span><span>Hold your fingertip on an object for a moment to pop it.</span></li>
+      </ul>
+      <div class="btn-row">
+        <button class="btn" id="btnStartCam">Play with my hands</button>
+        <button class="btn ghost" id="btnStartMouse">Play with mouse</button>
+      </div>
+      
+      <p id="status" class=""></p>
+    </div>
+  </section>
+
+  <section class="screen" id="pauseScreen" hidden="">
+    <div class="card">
+      <h2>Paused</h2>
+      <p class="lede">The camera is still on. Take your time.</p>
+      <div class="btn-row">
+        <button class="btn" id="btnResume">Keep playing</button>
+        <button class="btn ghost" id="btnQuit">End the game</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="overScreen" hidden="">
+    <div class="card">
+      <h2 id="overTitle">Well done!</h2>
+      <p class="lede" id="overText"></p>
+      <div class="stats">
+        <div class="stat"><b id="finalScore">0</b><span>points</span></div>
+        <div class="stat"><b id="finalHits">0</b><span>objects popped</span></div>
+        <div class="stat"><b id="finalAcc">0%</b><span>accuracy</span></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn" id="btnAgain">Play again</button>
+        <button class="btn ghost" id="btnMenu">Back to start</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== РЕДАКТОР ===== -->
+  <div id="editor" aria-label="Game editor" hidden="">
+    <div id="edTop">
+      <span class="edLogo">Bubble&nbsp;Cam</span>
+      <input id="projName" type="text" data-bind="name" aria-label="Project name">
+      <span id="saveState" title="">Saved</span>
+      <button class="btn ghost small" id="btnSaveTop">Save</button>
+      <span class="btn ghost small filebtn">Load<input type="file" accept="application/json,.json" id="loadProjectFile"></span>
+      <button class="btn small" id="btnPreviewTop">Preview</button>
+      <button class="btn ghost small" id="btnExportTop">Export</button>
+      <button class="icon-btn" id="btnCloseEditor" title="Close" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+    </div>
+    <div id="edBody">
+      <nav id="edNav">
+        <button data-sec="content" class=""><span class="ico">✎</span>Content</button>
+        <button data-sec="objects"><span class="ico">◍</span>Objects</button>
+        <button data-sec="gameplay"><span class="ico">▶</span>Gameplay</button>
+        <button data-sec="audio"><span class="ico">♪</span>Audio &amp; FX</button>
+        <button data-sec="export" class="on"><span class="ico">⇪</span>Preview &amp; Export</button>
+      </nav>
+
+      <div id="edPanes">
+        <!-- CONTENT -->
+        <section class="pane" data-pane="content" hidden="">
+          <div id="roundsBar"><div class="chips">
+    <button data-round="0" class="on">"SAT" words</button>
+    <button class="add" data-add-round="">+ Round</button>
+  </div></div>
+          <div id="roundBox">
+    <div class="sub">
+      <div class="row">
+        <input type="text" data-bind="rounds.0.name" value="&quot;SAT&quot; words" aria-label="Round name">
+        <button class="iconx" data-del-round="0" title="Remove round">✕</button>
+      </div>
+      <details style="margin-top:.6em">
+        <summary class="hint" style="cursor:pointer">Objects just for this round</summary>
+        <div class="row" style="margin-top:.5em">
+          <select data-bind="rounds.0.style.kind" style="flex:1">
+            <option value="">Same as the whole game</option>
+            <option value="bubble">Bubble</option><option value="image">Custom image</option>
+            <option value="sticker">Sticker</option><option value="bubbleImage">Bubble with image</option>
+            <option value="card">Card</option><option value="glow">Glowing</option>
+          </select>
+          <input type="text" placeholder="Picture URL" data-bind="rounds.0.style.skin" style="flex:1" value="">
+          <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.style.skin"></span>
+        </div>
+      </details>
+    </div>
+
+    <div class="chips">
+      <button data-task="0" class="on">Pop the words with a…</button><button data-task="1" class="">Pop the words with a…</button><button data-task="2" class="">Pop the words with a…</button>
+      <button class="add" data-add-task="">+ Task</button>
+    </div>
+
+    <div class="sub">
+      <div class="row" style="margin-bottom:.6em">
+        <select data-bind="rounds.0.tasks.0.type" style="flex:1">
+          <option value="word">Pop the correct word</option><option value="picture">Pop the correct picture</option><option value="all">Pop all correct objects</option><option value="category">Pop the category</option><option value="mixed">Mixed content</option>
+        </select>
+        <button class="iconx" data-del-task="0" title="Remove task">✕</button>
+      </div>
+      <div class="fld"><label>Question shown on screen</label>
+        <div class="row">
+          <input type="text" data-bind="rounds.0.tasks.0.question" value="Pop the words with a sound &quot;Ss&quot;">
+          <button class="emo" data-emoji-for="rounds.0.tasks.0.question" title="Add an emoji">😀</button>
+        </div></div>
+      <div class="fld"><label>How many right ones to pop</label>
+        <input type="number" min="1" max="30" step="1" data-bind="rounds.0.tasks.0.need"></div>
+    </div>
+
+    <div class="sub">
+      <h4>Quick input</h4>
+      <div class="fld"><label>Right answers — one per line</label>
+        <textarea class="bulk" id="bulkRight" placeholder="cat
+dog
+horse | https://…/horse.png"></textarea></div>
+      <div class="fld"><label>Wrong answers — one per line</label>
+        <textarea class="bulk" id="bulkWrong" placeholder="chair
+bread
+spoon"></textarea></div>
+      <div class="btn-row" style="justify-content:flex-start">
+        <button class="btn ghost small" data-bulk="add">Add to this task</button>
+        <button class="btn ghost small" data-bulk="replace">Replace the answers</button>
+        <button class="btn ghost small" data-bulk="tasks">One task per line</button>
+      </div>
+      <p class="hint">Emoji work as answers on their own — type or paste them straight into a line. “word | picture URL” attaches a picture to that word. “One task per line” makes a separate task out of every right answer, sharing the wrong ones as distractors.</p>
+    </div>
+
+    <div class="sub">
+      <h4>Answers <span class="hint" style="display:inline">8 right · 6 wrong</span></h4>
+      <div class="item right">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.0.image" src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdDljMzNpa2sweXk1OWw0a2FxbjYxYXVpYm92Z2Vpd2N3OHE1djZqMCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/l17M5uvfc1VosGUUP0/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.0.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.0.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.0.correct"> right</label>
+      <button class="iconx" data-del-obj="0" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.0.image" value="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdDljMzNpa2sweXk1OWw0a2FxbjYxYXVpYm92Z2Vpd2N3OHE1djZqMCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/l17M5uvfc1VosGUUP0/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.0.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.0.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.1.image" src="https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3NzlzcWp4a3g0NWlwbTFzaml2dHJwMWZ1NTh6bGM0N3htem9ibHNjbSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/0bQtf6nQTm1AZsCOyI/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.1.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.1.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.1.correct"> right</label>
+      <button class="iconx" data-del-obj="1" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.1.image" value="https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3NzlzcWp4a3g0NWlwbTFzaml2dHJwMWZ1NTh6bGM0N3htem9ibHNjbSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/0bQtf6nQTm1AZsCOyI/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.1.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.1.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item right">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.2.image" src="https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dTdob2MxcHFqZTFwYjIxempkOHo0a2dtOG1sOHRsd2I2cGc5eWlzaiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/Zz1urOC9mBHJUrvvvE/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.2.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.2.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.2.correct"> right</label>
+      <button class="iconx" data-del-obj="2" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.2.image" value="https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dTdob2MxcHFqZTFwYjIxempkOHo0a2dtOG1sOHRsd2I2cGc5eWlzaiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/Zz1urOC9mBHJUrvvvE/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.2.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.2.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item right">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.3.image" src="https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3Z3hpc2ZnYjlsa3RlNDQ0bnU5MWhvZHJkZDZtZWFqODRlNzA5Y2tlOSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/USJkxLSBlpTk0OH0qs/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.3.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.3.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.3.correct"> right</label>
+      <button class="iconx" data-del-obj="3" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.3.image" value="https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3Z3hpc2ZnYjlsa3RlNDQ0bnU5MWhvZHJkZDZtZWFqODRlNzA5Y2tlOSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/USJkxLSBlpTk0OH0qs/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.3.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.3.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item right">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.4.image" src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExeXhhZWM2MHBmYXFqZHJtN3M5cHhkMGUyZ2kxZTF6Ynliam56NTRzZCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/3o7WILflbm2MrOfNRu/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.4.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.4.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.4.correct"> right</label>
+      <button class="iconx" data-del-obj="4" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.4.image" value="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExeXhhZWM2MHBmYXFqZHJtN3M5cHhkMGUyZ2kxZTF6Ynliam56NTRzZCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/3o7WILflbm2MrOfNRu/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.4.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.4.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item right">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.5.image" src="" alt="" style="visibility:hidden">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.5.text" value="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExZmp4bGg4bTJobmg3cHFnOWdrY2U4bHM2dmo4cGVkZDNwNjU1bmUwMSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/NXfC1X8NjSzDBxqNCz/giphy.gif">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.5.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.5.correct"> right</label>
+      <button class="iconx" data-del-obj="5" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.5.image" value="">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.5.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.5.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item right">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.6.image" src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdG12NmsyZTh0c2FtdWF3em42aDUzd2h4dG0waWtsN29iMjgybHdoZSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/ZA53KsgcPf4bRt8iT4/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.6.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.6.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.6.correct"> right</label>
+      <button class="iconx" data-del-obj="6" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.6.image" value="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdG12NmsyZTh0c2FtdWF3em42aDUzd2h4dG0waWtsN29iMjgybHdoZSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/ZA53KsgcPf4bRt8iT4/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.6.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.6.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item right">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.7.image" src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExenA5MmJ3aTFhNWV0M2p1dW11NHZ3b2xpZ2FreWFnb2Y5bzl1MmduOCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/jnWXkNRl5slLTmZmkT/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.7.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.7.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.7.correct"> right</label>
+      <button class="iconx" data-del-obj="7" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.7.image" value="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExenA5MmJ3aTFhNWV0M2p1dW11NHZ3b2xpZ2FreWFnb2Y5bzl1MmduOCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/jnWXkNRl5slLTmZmkT/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.7.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.7.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item right">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.8.image" src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExanhjOG5xZWMyajZsYnBobWk2bTQ0b2FsY2F5dnludnkwOG5sanN0YiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/PhhsYAnOL6GUBEGPKQ/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.8.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.8.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.8.correct"> right</label>
+      <button class="iconx" data-del-obj="8" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.8.image" value="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExanhjOG5xZWMyajZsYnBobWk2bTQ0b2FsY2F5dnludnkwOG5sanN0YiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/PhhsYAnOL6GUBEGPKQ/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.8.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.8.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.9.image" src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcG55c2R0eDR5ZzhudHlsOTN6cTY4bW5pc3hrbGM1MDg0dnB4aDhpZCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/ggpoVsIg0LwtHfTBEY/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.9.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.9.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.9.correct"> right</label>
+      <button class="iconx" data-del-obj="9" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.9.image" value="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcG55c2R0eDR5ZzhudHlsOTN6cTY4bW5pc3hrbGM1MDg0dnB4aDhpZCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/ggpoVsIg0LwtHfTBEY/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.9.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.9.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.10.image" src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExYnBreXd5dGQ1a2x0NDgzMm1leXlsYzNyYmRvYTVyY3Y2ZXd3N3pzMiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/UN2IJoaRjKfyQnrNBo/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.10.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.10.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.10.correct"> right</label>
+      <button class="iconx" data-del-obj="10" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.10.image" value="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExYnBreXd5dGQ1a2x0NDgzMm1leXlsYzNyYmRvYTVyY3Y2ZXd3N3pzMiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/UN2IJoaRjKfyQnrNBo/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.10.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.10.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.11.image" src="https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3eXQ1cnR1ajJqZmVteDhvaTAxaWdkZmQyNXQ4YmgzcHNibmI0M2oycyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/ZQmTJ0Wxv9Amc2I8Hx/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.11.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.11.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.11.correct"> right</label>
+      <button class="iconx" data-del-obj="11" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.11.image" value="https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3eXQ1cnR1ajJqZmVteDhvaTAxaWdkZmQyNXQ4YmgzcHNibmI0M2oycyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/ZQmTJ0Wxv9Amc2I8Hx/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.11.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.11.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.12.image" src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExMDR5OHB3dHBmN2J3eDJjYmQ0eWlvb2NtdmZ1MHFjbmh5Zm5mcWY0cyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/GopjlKrzukpCVWcT1J/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.12.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.12.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.12.correct"> right</label>
+      <button class="iconx" data-del-obj="12" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.12.image" value="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExMDR5OHB3dHBmN2J3eDJjYmQ0eWlvb2NtdmZ1MHFjbmh5Zm5mcWY0cyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/GopjlKrzukpCVWcT1J/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.12.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.12.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div><div class="item">
+    <div class="top">
+      <img class="thumb" data-thumb="rounds.0.tasks.0.objects.13.image" src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOGl6dWNvcmVyazRtb3JxbWp5b2dhbjJ0dm0wOG92NmlhZjJobXhsMCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/uyiO3WeJHGoL73Mdy1/giphy.gif" alt="" style="visibility:visible">
+      <input type="text" placeholder="Word or emoji" data-bind="rounds.0.tasks.0.objects.13.text" value="">
+      <button class="emo" data-emoji-for="rounds.0.tasks.0.objects.13.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="rounds.0.tasks.0.objects.13.correct"> right</label>
+      <button class="iconx" data-del-obj="13" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="rounds.0.tasks.0.objects.13.image" value="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOGl6dWNvcmVyazRtb3JxbWp5b2dhbjJ0dm0wOG92NmlhZjJobXhsMCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/uyiO3WeJHGoL73Mdy1/giphy.gif">
+      <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.0.tasks.0.objects.13.image"></span>
+      <button class="iconx" data-clear="rounds.0.tasks.0.objects.13.image" title="Remove picture">✕</button>
+    </div>
+    
+  </div>
+      <div class="btn-row" style="justify-content:flex-start">
+        <button class="btn ghost small" data-add-obj="right">+ Right answer</button>
+        <button class="btn ghost small" data-add-obj="wrong">+ Wrong answer</button>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h4>Import from CSV or Google Sheets</h4>
+      <p class="hint" style="margin-bottom:.5em">Columns: <code>round, type, question, correct, wrong, image_url</code>.
+        Several answers in one cell go with <code>|</code>. Copying cells straight out of Google Sheets works too.</p>
+      <textarea class="bulk" id="csvText" placeholder="round,type,question,correct,wrong,image_url
+Animals,category,Pop the animals,cat|dog|frog,chair|bread,"></textarea>
+      <div class="btn-row" style="justify-content:flex-start;margin-top:.5em">
+        <span class="btn ghost small filebtn">Open .csv<input type="file" accept=".csv,text/csv,text/plain" id="csvFile"></span>
+        <button class="btn ghost small" id="btnCsvCheck">Check it</button>
+      </div>
+      <div id="csvPreview"></div>
+    </div></div>
+        </section>
+
+        <!-- OBJECTS -->
+        <section class="pane" data-pane="objects" hidden="">
+          <div class="fld">
+            <label for="objKind">Object type — used by the whole game</label>
+            <select id="objKind" data-bind="objects.style.kind">
+              <option value="bubble">Standard bubble</option>
+              <option value="image">Custom image</option>
+              <option value="sticker">Image sticker (white outline)</option>
+              <option value="bubbleImage">Bubble with image inside</option>
+              <option value="card">Rounded card</option>
+              <option value="glow">Glowing object</option>
+            </select>
+          </div>
+          <div class="fld">
+            <label>Object picture — replaces the bubble</label>
+            <div class="row">
+              <img id="skinThumb" class="thumb" alt="" src="" style="visibility: hidden;">
+              <input type="text" placeholder="https://… image URL" data-bind="objects.style.skin" id="skinUrl">
+              <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="objects.style.skin"></span>
+              <button class="iconx" data-clear="objects.style.skin" title="Remove">✕</button>
+            </div>
+            <p class="hint">“Custom image” and “Sticker” use the picture as the object itself; bubble, glowing and card types put it inside, keeping their shape around it.
+              PNG, JPG, WEBP and GIF — animated GIFs keep moving (Chrome and Firefox; Safari shows the first frame). Transparency and proportions are kept. A round or a single answer can override this.</p>
+          </div>
+          <div class="fld"><label>Size <span data-out="objects.style.scale">1</span>×</label>
+            <input type="range" min=".5" max="1.8" step=".05" data-bind="objects.style.scale"></div>
+          <div class="fld"><label>Opacity <span data-out="objects.style.opacity">1</span></label>
+            <input type="range" min=".2" max="1" step=".05" data-bind="objects.style.opacity"></div>
+          <div class="fld"><label>Outline <span data-out="objects.style.outline">2</span> px</label>
+            <input type="range" min="0" max="8" step="1" data-bind="objects.style.outline"></div>
+          <div class="fld"><label>Glow <span data-out="objects.style.glow">0</span></label>
+            <input type="range" min="0" max="30" step="1" data-bind="objects.style.glow"></div>
+          <div class="row wrap">
+            <div class="fld" style="flex:1"><label>Object colour</label>
+              <input type="text" data-bind="objects.style.color" placeholder="#8d9c56"></div>
+            <div class="fld" style="flex:1"><label>Text colour</label>
+              <input type="text" data-bind="objects.style.textColor" placeholder="#ffffff"></div>
+          </div>
+          <div class="sub">
+            <h4>Hit area</h4>
+            <div class="fld"><label>Shape counted as a hit</label>
+              <select data-bind="objects.style.hitShape">
+                <option value="auto">Follow the object (picture = its box)</option>
+                <option value="circle">Always a circle</option>
+                <option value="rect">Always a rectangle</option>
+              </select></div>
+            <div class="fld"><label>Hit area size <span data-out="objects.style.hitScale">1</span>×</label>
+              <input type="range" min=".6" max="1.5" step=".05" data-bind="objects.style.hitScale">
+              <p class="hint">Above 1 makes small objects easier to catch for younger children.</p></div>
+          </div>
+          <div class="sub">
+            <h4>Text</h4>
+            <div class="fld"><label>Font</label><select id="fontSel" data-bind="objects.style.fontFamily"><option value="Baloo 2">Baloo 2</option><option value="Nunito">Nunito</option><option value="Georgia">Georgia</option><option value="Verdana">Verdana</option><option value="Trebuchet MS">Trebuchet MS</option><option value="Courier New">Courier New</option><option value="Comic Sans MS">Comic Sans MS</option></select></div>
+            <div class="fld"><label>Text size <span data-out="objects.style.fontScale">1</span>×</label>
+              <input type="range" min=".6" max="1.6" step=".05" data-bind="objects.style.fontScale"></div>
+            <div class="fld"><label>Where the word sits</label>
+              <select data-bind="objects.style.textPlace">
+                <option value="inside">Inside the object</option>
+                <option value="below">Under the object</option>
+              </select></div>
+            <div class="fld"><label>Alignment</label>
+              <select data-bind="objects.style.textAlign">
+                <option value="center">Centre</option><option value="left">Left</option><option value="right">Right</option>
+              </select></div>
+            <label class="switchrow"><input type="checkbox" data-bind="objects.style.bold"> Bold</label>
+            <label class="switchrow"><input type="checkbox" data-bind="objects.style.textOutline"> Outline</label>
+            <label class="switchrow"><input type="checkbox" data-bind="objects.style.textShadow"> Shadow</label>
+            <label class="switchrow"><input type="checkbox" data-bind="objects.style.autoFit"> Shrink the word to fit the object</label>
+            <label class="switchrow"><input type="checkbox" data-bind="objects.style.hideText"> Hide the word (pictures only)</label>
+          </div>
+          <label class="switchrow"><input type="checkbox" data-bind="objects.style.faceDirection"> Flip the picture to face the way it moves</label>
+          <label class="switchrow"><input type="checkbox" data-bind="objects.perItem"> Give each answer its own design</label>
+          <p class="hint">With this on, every answer in Content gets its own type and picture. Empty fields fall back to the settings above.</p>
+          <button class="btn ghost small" data-reset="objects">Reset objects to default</button>
+        </section>
+
+        <!-- GAMEPLAY -->
+        <section class="pane" data-pane="gameplay" hidden="">
+          <div class="fld"><label>Objects on screen <span data-out="game.maxObjects">6</span></label>
+            <input type="range" min="3" max="15" step="1" data-bind="game.maxObjects"></div>
+          <div class="fld"><label>Speed <span data-out="game.speed">2</span></label>
+            <input type="range" min="1" max="5" step="1" data-bind="game.speed"></div>
+          <div class="fld"><label for="dirSel">Which way they move</label>
+            <select id="dirSel" data-bind="game.direction">
+              <option value="up">Up from the bottom</option>
+              <option value="down">Down from the top</option>
+              <option value="right">Left to right</option>
+              <option value="left">Right to left</option>
+              <option value="random">Mixed — each object picks its own</option>
+            </select></div>
+          <label class="switchrow"><input type="checkbox" data-bind="game.bounce"> Turn around at the edges</label>
+          <p class="hint">For fish and birds: they swim back and forth across the screen instead of leaving straight away.</p>
+          <div class="fld"><label>Darken the edges of the picture <span data-out="game.vignette">0.25</span></label>
+            <input type="range" min="0" max=".85" step=".05" data-bind="game.vignette">
+            <p class="hint">Nothing else is laid over the camera, so 0 shows the room exactly as it is. A little darkening at the edges helps the objects stand out in a bright room.</p></div>
+          <div class="fld"><label>Object size <span data-out="game.sizeScale">1</span>×</label>
+            <input type="range" min=".6" max="1.6" step=".05" data-bind="game.sizeScale"></div>
+          <div class="fld"><label>Hold to pop <span data-out="game.contactMs">140</span> ms</label>
+            <input type="range" min="40" max="500" step="10" data-bind="game.contactMs"></div>
+          <div class="fld"><label>Tracking smoothing <span data-out="game.smoothing">0.45</span></label>
+            <input type="range" min=".15" max=".9" step=".05" data-bind="game.smoothing">
+            <p class="hint">Higher follows the finger faster, lower is calmer.</p></div>
+          <label class="switchrow"><input type="checkbox" data-bind="game.timerOn"> Timer</label>
+          <div class="fld"><label>Seconds</label><input type="number" min="10" max="600" step="5" data-bind="game.timerSeconds"></div>
+          <label class="switchrow"><input type="checkbox" data-bind="game.livesOn"> Lives</label>
+          <div class="fld"><label>How many</label><input type="number" min="1" max="9" step="1" data-bind="game.lives"></div>
+          <div class="fld"><label>Life icon — emoji, a link or your own picture</label>
+            <div class="row">
+              <img id="lifeThumb" class="thumb" alt="" src="" style="visibility: hidden;">
+              <input type="text" data-bind="game.lifeIcon" placeholder="❤️ or https://…">
+              <button class="emo" data-emoji-for="game.lifeIcon" title="Pick an emoji">😀</button>
+              <span class="btn ghost small filebtn">Upload<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" data-file="game.lifeIcon"></span>
+              <button class="iconx" data-clear="game.lifeIcon" title="Back to the heart">✕</button>
+            </div>
+            <p class="hint">The sound played when a life is lost is in Audio &amp; FX, under “Life lost” — it is off until you switch it on.</p></div>
+          <div class="row wrap">
+            <div class="fld" style="flex:1"><label>Points for a right pop</label>
+              <input type="number" min="0" max="100" step="1" data-bind="game.pointsRight"></div>
+            <div class="fld" style="flex:1"><label>Points lost on a mistake</label>
+              <input type="number" min="0" max="100" step="1" data-bind="game.pointsWrong"></div>
+          </div>
+          <label class="switchrow"><input type="checkbox" data-bind="game.randomOrder"> Shuffle the rounds</label>
+          <p class="hint">Off means the rounds come in the order you put them in. With the timer off, the game finishes when the last task is done.</p>
+
+          <div class="sub">
+            <h4>Hands</h4>
+            <div class="fld"><label>How many hands</label>
+              <select data-bind="game.twoHands">
+                <option value="false">One hand</option>
+                <option value="true">Two hands</option>
+              </select>
+              <p class="hint">Takes effect the next time hand tracking starts.</p></div>
+            <div class="fld"><label>How an object is popped</label>
+              <select data-bind="game.input">
+                <option value="touch">Touch — hold the fingertip on it</option>
+                <option value="pinch">Pinch — bring thumb and finger together on it</option>
+              </select>
+              <p class="hint">With Pinch an open hand never pops anything, however long it rests on an object — the pointer turns into a dashed ring while the game waits for the pinch. Touch is the safer choice for younger children.</p></div>
+          </div>
+
+          <details class="sub">
+            <summary><b>On-screen extras</b></summary>
+            <div style="margin-top:.7em">
+              <label class="switchrow"><input type="checkbox" data-bind="game.showPointer"> Show the fingertip pointer</label>
+              <label class="switchrow"><input type="checkbox" data-bind="game.showCamera"> Show the camera picture behind the game</label>
+              <label class="switchrow"><input type="checkbox" data-bind="game.showPause"> Pause button</label>
+              <label class="switchrow"><input type="checkbox" data-bind="game.showFullscreen"> Fullscreen button</label>
+              <p class="hint">Hiding the camera keeps hand tracking working — students just see the plain background instead of themselves.</p>
+            </div>
+          </details>
+          <button class="btn ghost small" data-reset="game">Reset gameplay to default</button>
+        </section>
+
+        <!-- AUDIO & EFFECTS -->
+        <section class="pane" data-pane="audio" hidden="">
+          <div id="audioBox"><div class="sub">
+      <h4>Pop</h4>
+      <label class="switchrow"><input type="checkbox" data-bind="audio.pop.on"> Play this sound</label>
+      <div class="fld"><label>Source</label>
+        <select data-bind="audio.pop.mode" data-rerender="audio">
+          <option value="builtin">Built-in</option><option value="custom">My file or URL</option>
+        </select></div>
+      
+      <div class="fld"><label>Which one</label>
+        <select data-bind="audio.pop.builtin">
+          <option value="pop-soft">pop soft</option><option value="pop-bright">pop bright</option><option value="blip">blip</option>
+        </select></div>
+      <div class="fld"><label>Volume <span data-out="audio.pop.volume">0.8</span></label>
+        <input type="range" min="0" max="1" step=".05" data-bind="audio.pop.volume"></div>
+      <button class="btn ghost small" data-preview-sound="pop">Play it</button>
+    </div><div class="sub">
+      <h4>Correct answer</h4>
+      <label class="switchrow"><input type="checkbox" data-bind="audio.correct.on"> Play this sound</label>
+      <div class="fld"><label>Source</label>
+        <select data-bind="audio.correct.mode" data-rerender="audio">
+          <option value="builtin">Built-in</option><option value="custom">My file or URL</option>
+        </select></div>
+      
+      <div class="fld"><label>Which one</label>
+        <select data-bind="audio.correct.builtin">
+          <option value="chime">chime</option><option value="ding">ding</option><option value="rise">rise</option>
+        </select></div>
+      <div class="fld"><label>Volume <span data-out="audio.correct.volume">0.8</span></label>
+        <input type="range" min="0" max="1" step=".05" data-bind="audio.correct.volume"></div>
+      <button class="btn ghost small" data-preview-sound="correct">Play it</button>
+    </div><div class="sub">
+      <h4>Wrong answer</h4>
+      <label class="switchrow"><input type="checkbox" data-bind="audio.wrong.on"> Play this sound</label>
+      <div class="fld"><label>Source</label>
+        <select data-bind="audio.wrong.mode" data-rerender="audio">
+          <option value="builtin">Built-in</option><option value="custom">My file or URL</option>
+        </select></div>
+      
+      <div class="fld"><label>Which one</label>
+        <select data-bind="audio.wrong.builtin">
+          <option value="buzz">buzz</option><option value="thud">thud</option>
+        </select></div>
+      <div class="fld"><label>Volume <span data-out="audio.wrong.volume">0.8</span></label>
+        <input type="range" min="0" max="1" step=".05" data-bind="audio.wrong.volume"></div>
+      <button class="btn ghost small" data-preview-sound="wrong">Play it</button>
+    </div><div class="sub">
+      <h4>Life lost</h4>
+      <label class="switchrow"><input type="checkbox" data-bind="audio.life.on"> Play this sound</label>
+      <div class="fld"><label>Source</label>
+        <select data-bind="audio.life.mode" data-rerender="audio">
+          <option value="builtin">Built-in</option><option value="custom">My file or URL</option>
+        </select></div>
+      
+      <div class="fld"><label>Which one</label>
+        <select data-bind="audio.life.builtin">
+          <option value="thud">thud</option><option value="descend">descend</option>
+        </select></div>
+      <div class="fld"><label>Volume <span data-out="audio.life.volume">0.8</span></label>
+        <input type="range" min="0" max="1" step=".05" data-bind="audio.life.volume"></div>
+      <button class="btn ghost small" data-preview-sound="life">Play it</button>
+    </div><div class="sub">
+      <h4>Countdown</h4>
+      <label class="switchrow"><input type="checkbox" data-bind="audio.countdown.on"> Play this sound</label>
+      <div class="fld"><label>Source</label>
+        <select data-bind="audio.countdown.mode" data-rerender="audio">
+          <option value="builtin">Built-in</option><option value="custom">My file or URL</option>
+        </select></div>
+      
+      <div class="fld"><label>Which one</label>
+        <select data-bind="audio.countdown.builtin">
+          <option value="tick">tick</option><option value="beep">beep</option>
+        </select></div>
+      <div class="fld"><label>Volume <span data-out="audio.countdown.volume">0.8</span></label>
+        <input type="range" min="0" max="1" step=".05" data-bind="audio.countdown.volume"></div>
+      <button class="btn ghost small" data-preview-sound="countdown">Play it</button>
+    </div><div class="sub">
+      <h4>Victory</h4>
+      <label class="switchrow"><input type="checkbox" data-bind="audio.victory.on"> Play this sound</label>
+      <div class="fld"><label>Source</label>
+        <select data-bind="audio.victory.mode" data-rerender="audio">
+          <option value="builtin">Built-in</option><option value="custom">My file or URL</option>
+        </select></div>
+      
+      <div class="fld"><label>Which one</label>
+        <select data-bind="audio.victory.builtin">
+          <option value="fanfare">fanfare</option><option value="sparkle">sparkle</option>
+        </select></div>
+      <div class="fld"><label>Volume <span data-out="audio.victory.volume">0.8</span></label>
+        <input type="range" min="0" max="1" step=".05" data-bind="audio.victory.volume"></div>
+      <button class="btn ghost small" data-preview-sound="victory">Play it</button>
+    </div><div class="sub">
+      <h4>Game over</h4>
+      <label class="switchrow"><input type="checkbox" data-bind="audio.gameover.on"> Play this sound</label>
+      <div class="fld"><label>Source</label>
+        <select data-bind="audio.gameover.mode" data-rerender="audio">
+          <option value="builtin">Built-in</option><option value="custom">My file or URL</option>
+        </select></div>
+      
+      <div class="fld"><label>Which one</label>
+        <select data-bind="audio.gameover.builtin">
+          <option value="descend">descend</option><option value="sigh">sigh</option>
+        </select></div>
+      <div class="fld"><label>Volume <span data-out="audio.gameover.volume">0.8</span></label>
+        <input type="range" min="0" max="1" step=".05" data-bind="audio.gameover.volume"></div>
+      <button class="btn ghost small" data-preview-sound="gameover">Play it</button>
+    </div></div>
+          <div id="effectsBox"><div class="sub">
+      <h4>When the player wins</h4>
+      <div class="fld"><label>Effects (tap to pick, order is kept)</label>
+        <div class="chips">
+          <button data-fx="effects.victory.types" data-val="confetti" class="on">Confetti</button><button data-fx="effects.victory.types" data-val="spark">Spark column</button><button data-fx="effects.victory.types" data-val="fireworks">Fireworks</button><button data-fx="effects.victory.types" data-val="stars" class="on">Stars burst</button><button data-fx="effects.victory.types" data-val="magic">Magic dust</button><button data-fx="effects.victory.types" data-val="balloons">Balloons</button><button data-fx="effects.victory.types" data-val="bubbles">Bubble explosion</button><button data-fx="effects.victory.types" data-val="rain">Rain</button><button data-fx="effects.victory.types" data-val="deadfish">Dead fish</button><button data-fx="effects.victory.types" data-val="sadfaces">Sad faces</button><button data-fx="effects.victory.types" data-val="storm">Thunder clouds</button>
+        </div></div>
+      <div class="fld"><label>Intensity <span data-out="effects.victory.intensity">3</span></label>
+        <input type="range" min="1" max="5" step="1" data-bind="effects.victory.intensity"></div>
+      <div class="fld"><label>Duration <span data-out="effects.victory.duration">3</span> s</label>
+        <input type="range" min=".5" max="10" step=".5" data-bind="effects.victory.duration"></div>
+      <button class="btn ghost small" data-preview-fx="victory">Preview</button>
+    </div><div class="sub">
+      <h4>When the game is lost</h4>
+      <div class="fld"><label>Effects (tap to pick, order is kept)</label>
+        <div class="chips">
+          <button data-fx="effects.gameover.types" data-val="confetti">Confetti</button><button data-fx="effects.gameover.types" data-val="spark">Spark column</button><button data-fx="effects.gameover.types" data-val="fireworks">Fireworks</button><button data-fx="effects.gameover.types" data-val="stars">Stars burst</button><button data-fx="effects.gameover.types" data-val="magic">Magic dust</button><button data-fx="effects.gameover.types" data-val="balloons">Balloons</button><button data-fx="effects.gameover.types" data-val="bubbles">Bubble explosion</button><button data-fx="effects.gameover.types" data-val="rain" class="on">Rain</button><button data-fx="effects.gameover.types" data-val="deadfish">Dead fish</button><button data-fx="effects.gameover.types" data-val="sadfaces">Sad faces</button><button data-fx="effects.gameover.types" data-val="storm">Thunder clouds</button>
+        </div></div>
+      <div class="fld"><label>Intensity <span data-out="effects.gameover.intensity">3</span></label>
+        <input type="range" min="1" max="5" step="1" data-bind="effects.gameover.intensity"></div>
+      <div class="fld"><label>Duration <span data-out="effects.gameover.duration">3</span> s</label>
+        <input type="range" min=".5" max="10" step=".5" data-bind="effects.gameover.duration"></div>
+      <button class="btn ghost small" data-preview-fx="gameover">Preview</button>
+    </div></div>
+          <p class="hint">Uploaded sounds are stored inside the project and travel with the exported game. Remote URLs need the host to allow cross-origin playback.</p>
+          <div class="btn-row" style="justify-content:flex-start">
+            <button class="btn ghost small" data-reset="audio">Reset sounds</button>
+            <button class="btn ghost small" data-reset="effects">Reset effects</button>
+          </div>
+        </section>
+
+        <!-- PREVIEW & EXPORT -->
+        <section class="pane" data-pane="export">
+          <div class="sub">
+            <h4>Try it</h4>
+            <div class="btn-row" style="justify-content:flex-start">
+              <button class="btn small" id="btnTestHands">Test with the camera</button>
+              <button class="btn ghost small" id="btnTestMouse">Test with the mouse</button>
+            </div>
+            <p class="hint">Press Esc or the ✕ in the game to come back here.</p>
+          </div>
+          <div class="sub">
+            <h4>Project file</h4>
+            <div class="btn-row" style="justify-content:flex-start">
+              <button class="btn ghost small" id="btnSaveProject">Save project (.json)</button>
+              <span class="btn ghost small filebtn">Load project<input type="file" accept="application/json,.json" id="loadProjectFile2"></span>
+              <button class="btn ghost small" id="btnNewProject">New project</button>
+              <button class="btn ghost small" id="btnDuplicate">Duplicate</button>
+              <button class="btn ghost small" id="btnResetProject">Reset to demo</button>
+            </div>
+            <p class="hint" id="sizeNote">Project size: 11 KB</p>
+          </div>
+          <div class="sub">
+            <h4>Export the game</h4>
+            <p class="hint">One HTML file with your rounds, pictures and sounds inside. It opens straight into the game — no editor, nothing to install. Hand tracking still downloads MediaPipe, so students need to be online, and the camera needs the page to be served over https.</p>
+            <div class="btn-row" style="justify-content:flex-start">
+              <button class="btn small" id="btnExportGame">Download game (.html)</button>
+            </div>
+          </div>
+          <div class="sub">
+            <h4>Put it on a site or in Genially</h4>
+            <div class="fld"><label>Web address of the uploaded game file</label>
+              <input type="text" data-bind="gameUrl" placeholder="https://your-name.github.io/bubble-cam/game.html"></div>
+            <div class="btn-row" style="justify-content:flex-start">
+              <button class="btn ghost small" id="btnCopyIframe">Copy iframe code</button>
+            </div>
+            <p class="hint">Whether the camera actually works inside the iframe is up to the platform you embed into — Genially and most hosts pass the permission through, but some strip it. The iframe needs <code>allow="camera"</code> — it is already in the copied code. Upload the exported file first: a link to the editor would show students an empty editor, not your game.</p>
+          </div>
+        </section>
+      </div>
+
+      <div id="edPreview">
+        <p class="hint" style="margin:0 0 .5em;text-align:center">Instant preview — how the objects look and move, no camera needed</p>
+        <div class="pvHead"><span id="pvQuestion">Pop the words with a sound "Ss"</span></div>
+        <canvas id="livePreview" width="1470" height="1844"></canvas>
+        <p class="hint" id="pvNote">8 right answers · pop 8 to finish · pop the category</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="emojiPicker" hidden="">
+    <div class="chips" id="emojiGroups"></div>
+    <div id="emojiGrid"></div>
+  </div>
+  <div id="toast" class="">Game exported (0.2 MB). Upload it over https so the camera can work.</div>
+</div>
+<script type="module">
+/* ==========================================================================
+   A. ПРОЕКТ — всё, что настраивает учитель, живёт в одном объекте.
+      Он же уедет в экспорт игры в Phase 3.
+   ========================================================================== */
+const PROJECT_KEY = "bubblecam.project.v2";
+
+const W = (text, correct=true) => ({ text, image:"", correct, style:null });
+
+const DEMO_ROUNDS = [
+  { name:"Animals", style:null, tasks:[
+    { type:"category", question:"Pop the animals", need:4, objects:[
+      W("cat"),W("dog"),W("horse"),W("rabbit"),W("frog"),W("bear"),
+      W("chair",false),W("bread",false),W("cloud",false),W("spoon",false),W("shoe",false),W("river",false)]}
+  ]},
+  { name:"Fruits", style:null, tasks:[
+    { type:"category", question:"Pop the fruits", need:4, objects:[
+      W("apple"),W("banana"),W("cherry"),W("lemon"),W("pear"),W("grape"),
+      W("table",false),W("truck",false),W("sock",false),W("glove",false),W("window",false),W("pencil",false)]}
+  ]},
+  { name:"Opposites", style:null, tasks:[
+    { type:"word", question:"Pop the opposite of BIG", need:1, objects:[
+      W("small"),W("tall",false),W("wide",false),W("heavy",false)]},
+    { type:"word", question:"Pop the opposite of HOT", need:1, objects:[
+      W("cold"),W("warm",false),W("dry",false),W("sunny",false)]},
+    { type:"word", question:"Pop the opposite of FAST", need:1, objects:[
+      W("slow"),W("quick",false),W("early",false),W("loud",false)]}
+  ]}
+];
+
+const TASK_TYPES = [
+  { key:"word",     label:"Pop the correct word" },
+  { key:"picture",  label:"Pop the correct picture" },
+  { key:"all",      label:"Pop all correct objects" },
+  { key:"category", label:"Pop the category" },
+  { key:"mixed",    label:"Mixed content" }
+];
+/* сколько верных нужно лопнуть, чтобы задание закрылось */
+function neededFor(task){
+  const right = task.objects.filter(o => o.correct).length || 1;
+  if(task.type === "word" || task.type === "picture") return 1;
+  if(task.type === "all") return right;
+  return Math.max(1, Math.min(Math.round(task.need) || 1, right));
+}
+
+const SOUND_EVENTS = [
+  { key:"pop",      label:"Pop",            builtins:["pop-soft","pop-bright","blip"] },
+  { key:"correct",  label:"Correct answer", builtins:["chime","ding","rise"] },
+  { key:"wrong",    label:"Wrong answer",   builtins:["buzz","thud"] },
+  { key:"life",     label:"Life lost",      builtins:["thud","descend"] },
+  { key:"countdown",label:"Countdown",      builtins:["tick","beep"] },
+  { key:"victory",  label:"Victory",        builtins:["fanfare","sparkle"] },
+  { key:"gameover", label:"Game over",      builtins:["descend","sigh"] }
+];
+
+const EFFECT_TYPES = [
+  { key:"confetti",  label:"Confetti" },
+  { key:"spark",     label:"Spark column" },
+  { key:"fireworks", label:"Fireworks" },
+  { key:"stars",     label:"Stars burst" },
+  { key:"magic",     label:"Magic dust" },
+  { key:"balloons",  label:"Balloons" },
+  { key:"bubbles",   label:"Bubble explosion" },
+  { key:"rain",      label:"Rain" },
+  { key:"deadfish",  label:"Dead fish" },
+  { key:"sadfaces",  label:"Sad faces" },
+  { key:"storm",     label:"Thunder clouds" }
+];
+const SAD_FACES = ["😢","😞","😔","☹️","😿","🥺"];
+
+function defaultProject(){
+  return {
+    version:3,
+    name:"My Bubble Cam game",
+    game:{ maxObjects:6, speed:2, sizeScale:1, contactMs:140, popCooldown:220,
+           direction:"up", bounce:false, vignette:.25,
+           input:"touch", showPointer:true, showCamera:true, lifeIcon:"❤️",
+           showPause:true, showFullscreen:true,
+           timerOn:true, timerSeconds:90, livesOn:true, lives:3,
+           pointsRight:10, pointsWrong:5, twoHands:true, randomOrder:false, smoothing:.45 },
+    objects:{ perItem:false, style:{ kind:"bubble", skin:"", scale:1, opacity:1, outline:2, glow:0,
+              color:"#8d9c56", textColor:"#ffffff", fontScale:1, textPlace:"inside",
+              faceDirection:false,
+              fontFamily:"Baloo 2", bold:true, textOutline:true, textShadow:false,
+              textAlign:"center", autoFit:true, hideText:false,
+              hitShape:"auto", hitScale:1 } },
+    audio:Object.fromEntries(SOUND_EVENTS.map(e =>
+           [e.key, { on:e.key !== "life", volume:.8, mode:"builtin", builtin:e.builtins[0], src:"", name:"" }])),
+    effects:{ victory:{ types:["confetti","stars"], intensity:3, duration:3 },
+              gameover:{ types:["rain"],            intensity:3, duration:3 } },
+    rounds:JSON.parse(JSON.stringify(DEMO_ROUNDS))
+  };
+}
+
+/* слияние с умолчаниями — старые сохранения открываются без потерь */
+function merge(base, saved){
+  if(!saved || typeof saved !== "object") return base;
+  for(const k in base){
+    if(Array.isArray(base[k])) { if(Array.isArray(saved[k])) base[k] = saved[k]; }
+    else if(base[k] && typeof base[k] === "object") merge(base[k], saved[k]);
+    else if(saved[k] !== undefined) base[k] = saved[k];
+  }
+  return base;
+}
+function normalize(saved){
+  const p = merge(defaultProject(), saved);
+  p.rounds = (p.rounds || []).map((r, i) => {
+    /* проекты Phase 2: round.items → один раздел внутри раунда */
+    let tasks = r.tasks;
+    if(!Array.isArray(tasks) || !tasks.length){
+      tasks = [{ type:"category", question:r.question || "Pop the right one",
+                 need:r.need || 1, objects:r.items || [] }];
+    }
+    return {
+      name: r.name || r.question || ("Round " + (i+1)),
+      style: r.style || null,
+      tasks: tasks.map(t => ({
+        type: TASK_TYPES.some(x => x.key === t.type) ? t.type : "category",
+        question: t.question || "Pop the right one",
+        need: Math.max(1, +t.need || 1),
+        objects: (t.objects || []).map(o => ({
+          text:   o.text  || "",
+          image:  o.image || "",
+          correct: o.correct !== false,
+          style:  o.style || null
+        }))
+      })).filter(t => t.objects.length)
+    };
+  }).filter(r => r.tasks.length);
+  if(!p.rounds.length) p.rounds = JSON.parse(JSON.stringify(DEMO_ROUNDS));
+  for(const r of p.rounds) for(const t of r.tasks) t.need = neededFor(t);
+  p.version = 3;
+  return p;
+}
+let PROJECT = normalize(loadStored());
+function loadStored(){
+  try{ const raw = localStorage.getItem(PROJECT_KEY); return raw ? JSON.parse(raw) : null; }
+  catch(e){ return null; }
+}
+const PLAY_MODE = document.documentElement.dataset.mode === "play";
+let dirty = false;
+function setSaveState(text, ok=true){
+  const el = document.getElementById("saveState");
+  if(el){ el.textContent = text; el.classList.toggle("bad", !ok); }
+}
+let saveTimer = 0;
+function saveProject(){
+  if(PLAY_MODE) return;
+  dirty = true;
+  setSaveState("Unsaved changes");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try{
+      localStorage.setItem(PROJECT_KEY, JSON.stringify(PROJECT));
+      setSaveState(dirty ? "Kept in this browser — not saved to a file yet" : "Saved");
+    }catch(e){
+      setSaveState("Not saved in this browser — use Save .json", false);
+      toast("Could not save locally — the pictures or sounds are too large for browser storage. Save a .json file instead.");
+    }
+  }, 400);
+}
+
+/* ==========================================================================
+   B. DOM и мелкие утилиты
+   ========================================================================== */
+const $ = id => document.getElementById(id);
+const stage=$("stage"), video=$("cam"), canvas=$("canvas"), ctx=canvas.getContext("2d");
+const fxCanvas=$("fxCanvas"), fx=fxCanvas.getContext("2d");
+const hud=$("hud"), elScore=$("scoreVal"), elTime=$("timeVal"), elTimeChip=$("timeChip");
+const elHearts=$("hearts"), elQuestion=$("question"), elProgress=$("progress");
+const menuScreen=$("menuScreen"), pauseScreen=$("pauseScreen"), overScreen=$("overScreen");
+const status=$("status"), toastEl=$("toast");
+
+const rand  = (a,b) => a + Math.random()*(b-a);
+const pick  = arr => arr[Math.floor(Math.random()*arr.length)];
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+const shuffle = a0 => { const a=a0.slice(); for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; };
+let toastTimer = 0;
+function toast(msg){
+  toastEl.textContent = msg; toastEl.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.classList.remove("show"), 3600);
+}
+
+/* ==========================================================================
+   C. КАРТИНКИ — общий кэш, без crossOrigin (рисуем, но не читаем пиксели,
+      поэтому «запачканный» холст не мешает и больше картинок по URL работает)
+   ========================================================================== */
+const imgCache = new Map();
+const isGif = src => /^data:image\/gif/i.test(src) || /\.gif(\?|#|$)/i.test(src);
+/* Анимированный GIF крутится только у картинки, которую браузер действительно
+   рисует на странице. Поэтому GIF-ы живут в крошечном невидимом слое, а на canvas
+   каждый кадр попадает их текущий кадр. Обычные картинки туда не попадают. */
+let gifHolder = null;
+function holdGif(img){
+  if(!gifHolder){
+    gifHolder = document.createElement("div");
+    gifHolder.id = "gifHolder";
+    gifHolder.setAttribute("aria-hidden", "true");
+    gifHolder.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;" +
+      "overflow:hidden;opacity:.01;pointer-events:none;z-index:-1";
+    document.body.appendChild(gifHolder);
+  }
+  img.style.cssText = "width:2px;height:2px";
+  gifHolder.appendChild(img);
+}
+function getImage(src){
+  if(!src) return null;
+  let e = imgCache.get(src);
+  if(!e){
+    e = { img:new Image(), ok:false, bad:false, gif:isGif(src) };
+    e.img.onload  = () => { e.ok = true; if(e.gif) holdGif(e.img); };
+    e.img.onerror = () => { e.bad = true; };
+    e.img.src = src;
+    imgCache.set(src, e);
+  }
+  return e.ok ? e.img : null;
+}
+function preloadImages(){
+  getImage(PROJECT.objects.style.skin);
+  for(const r of PROJECT.rounds){
+    if(r.style) getImage(r.style.skin);
+    for(const t of r.tasks) for(const o of t.objects){
+      getImage(o.image); if(o.style) getImage(o.style.skin);
+    }
+  }
+}
+
+/* ==========================================================================
+   D. ЗВУК — встроенные синтезированные и пользовательские файлы/ссылки
+   ========================================================================== */
+let audio = null;
+function initAudio(){
+  if(audio){ if(audio.state === "suspended") audio.resume(); return; }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if(AC) audio = new AC();
+}
+function tone(freq, dur, type="sine", gain=.18, slideTo=null, delay=0){
+  if(!audio || audio.state !== "running") return;
+  const t = audio.currentTime + delay;
+  const osc = audio.createOscillator(), g = audio.createGain();
+  osc.type = type; osc.frequency.setValueAtTime(freq, t);
+  if(slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+  g.gain.setValueAtTime(Math.max(.0001, gain), t);
+  g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+  osc.connect(g).connect(audio.destination);
+  osc.start(t); osc.stop(t + dur + .03);
+}
+function noiseBurst(dur=.09, gain=.22, freq=1400){
+  if(!audio || audio.state !== "running") return;
+  const n = Math.floor(audio.sampleRate * dur);
+  const buf = audio.createBuffer(1, n, audio.sampleRate), d = buf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i] = (Math.random()*2-1) * (1 - i/n);
+  const src = audio.createBufferSource(); src.buffer = buf;
+  const g = audio.createGain(); g.gain.value = gain;
+  const f = audio.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = freq;
+  src.connect(f).connect(g).connect(audio.destination); src.start();
+}
+const BUILTIN = {
+  "pop-soft":   v => { noiseBurst(.07,.20*v); tone(760,.12,"sine",.14*v,260); },
+  "pop-bright": v => { noiseBurst(.05,.26*v,2600); tone(1180,.1,"triangle",.14*v,420); },
+  "blip":       v => tone(880,.09,"square",.09*v,1320),
+  "chime":      v => { tone(660,.1,"triangle",.15*v); tone(990,.18,"triangle",.14*v,null,.09); },
+  "ding":       v => tone(1320,.3,"sine",.16*v),
+  "rise":       v => { [523,659,784].forEach((f,i)=>tone(f,.14,"triangle",.13*v,null,i*.07)); },
+  "buzz":       v => tone(190,.22,"sawtooth",.1*v,120),
+  "thud":       v => { noiseBurst(.14,.18*v,260); tone(110,.2,"sine",.12*v,70); },
+  "tick":       v => tone(1200,.06,"square",.07*v),
+  "beep":       v => tone(880,.12,"sine",.1*v),
+  "fanfare":    v => { [523,659,784,1046].forEach((f,i)=>tone(f,.22,"triangle",.14*v,null,i*.11)); },
+  "sparkle":    v => { for(let i=0;i<7;i++) tone(880+i*210,.12,"sine",.08*v,null,i*.06); },
+  "descend":    v => { [392,330,262].forEach((f,i)=>tone(f,.3,"sine",.13*v,null,i*.16)); },
+  "sigh":       v => tone(330,.6,"sine",.12*v,160)
+};
+/* пул элементов для пользовательских файлов: позволяет накладывать звуки */
+const audioPool = new Map();
+function playCustom(src, vol){
+  if(!src) return;
+  let pool = audioPool.get(src);
+  if(!pool){
+    pool = []; for(let i=0;i<3;i++){ const a = new Audio(); a.preload = "auto"; a.src = src; pool.push(a); }
+    pool.i = 0; audioPool.set(src, pool);
+  }
+  const a = pool[pool.i = (pool.i + 1) % pool.length];
+  try{ a.currentTime = 0; a.volume = clamp(vol,0,1); a.play().catch(()=>{}); }catch(e){}
+}
+function playSound(key){
+  const cfg = PROJECT.audio[key];
+  if(!cfg || !cfg.on) return;
+  if(cfg.mode === "custom" && cfg.src) playCustom(cfg.src, cfg.volume);
+  else (BUILTIN[cfg.builtin] || BUILTIN["blip"])(cfg.volume);
+}
+
+/* ==========================================================================
+   E. СОСТОЯНИЕ И ХОЛСТЫ
+   ========================================================================== */
+const G = {
+  phase:"menu", mode:"hands",
+  score:0, lives:3, timeLeft:90, hits:0, misses:0,
+  order:[], taskPos:0, round:null, task:null, need:1, done:0, taskClosing:false,
+  objects:[], sparks:[], floaters:[],
+  nextId:1, nextSpawn:0, lastPop:-1e9,
+  w:0, h:0, dpr:1, hudBottom:120, lastT:0, timerAcc:0
+};
+const pointers = new Map();
+
+function resize(){
+  const r = stage.getBoundingClientRect();
+  G.w = Math.max(1, r.width); G.h = Math.max(1, r.height);
+  G.dpr = Math.min(window.devicePixelRatio || 1, 2);
+  for(const [cv, c] of [[canvas, ctx], [fxCanvas, fx]]){
+    cv.width = Math.round(G.w * G.dpr); cv.height = Math.round(G.h * G.dpr);
+    c.setTransform(G.dpr, 0, 0, G.dpr, 0, 0);
+  }
+  G.hudBottom = hud.hidden ? 0 : Math.max(0, hud.getBoundingClientRect().bottom - r.top);
+}
+new ResizeObserver(resize).observe(stage);
+window.addEventListener("orientationchange", () => setTimeout(resize, 250));
+
+/* ==========================================================================
+   F. КАМЕРА + MEDIAPIPE  (Phase 1, без изменений по сути)
+   ========================================================================== */
+const MP_VERSION = "0.10.14";
+const MP_BASE  = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
+const MP_MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+let handLandmarker = null, stream = null, lastVideoTime = -1, trackedHands = 0;
+
+function say(text, isError=false){ status.textContent = text; status.classList.toggle("error", isError); }
+
+async function loadModel(){
+  const wanted = PROJECT.game.twoHands ? 2 : 1;
+  if(handLandmarker && trackedHands === wanted) return handLandmarker;
+  if(handLandmarker){ try{ handLandmarker.close(); }catch(e){} handLandmarker = null; }
+  const { FilesetResolver, HandLandmarker } = await import(`${MP_BASE}`);
+  const vision = await FilesetResolver.forVisionTasks(`${MP_BASE}/wasm`);
+  const opts = delegate => ({
+    baseOptions:{ modelAssetPath:MP_MODEL, delegate },
+    runningMode:"VIDEO", numHands:wanted,
+    minHandDetectionConfidence:.5, minHandPresenceConfidence:.5, minTrackingConfidence:.5
+  });
+  try{ handLandmarker = await HandLandmarker.createFromOptions(vision, opts("GPU")); }
+  catch(e){ handLandmarker = await HandLandmarker.createFromOptions(vision, opts("CPU")); }
+  trackedHands = wanted;
+  return handLandmarker;
+}
+async function openCamera(){
+  stream = await navigator.mediaDevices.getUserMedia({
+    video:{ facingMode:"user", width:{ideal:1280}, height:{ideal:720} }, audio:false });
+  video.srcObject = stream; await video.play();
+  if(!video.videoWidth) await new Promise(r => video.addEventListener("loadedmetadata", r, {once:true}));
+  video.classList.add("live");
+}
+function closeCamera(){
+  if(stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+  video.srcObject = null; video.classList.remove("live"); lastVideoTime = -1;
+}
+function cameraError(err){
+  const name = err && err.name || "";
+  if(name === "NotAllowedError" || name === "SecurityError")
+    return "Camera access was blocked. Allow it in the address bar, then press the button again — or play with the mouse.";
+  if(name === "NotFoundError" || name === "OverconstrainedError")
+    return "No camera found on this device. You can still play with the mouse.";
+  if(name === "NotReadableError")
+    return "Another app is using the camera — close Zoom, Meet or another tab, then try again.";
+  if(!window.isSecureContext)
+    return "The camera needs HTTPS. Open this page over https:// or on localhost.";
+  return "Hand tracking could not start: " + (err && err.message || err) + ". You can play with the mouse instead.";
+}
+function videoMapping(){
+  const vw = video.videoWidth || 16, vh = video.videoHeight || 9;
+  const scale = Math.max(G.w/vw, G.h/vh), dw = vw*scale, dh = vh*scale;
+  return { dw, dh, ox:(G.w-dw)/2, oy:(G.h-dh)/2 };
+}
+function trackHands(nowMs){
+  if(!handLandmarker || !stream || video.readyState < 2) return;
+  if(video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  let res; try{ res = handLandmarker.detectForVideo(video, nowMs); }catch(e){ return; }
+  const m = videoMapping(), seen = new Set(), hands = res && res.landmarks || [];
+  for(let i=0;i<hands.length;i++){
+    const lm = hands[i][8]; if(!lm) continue;
+    /* щепоть: расстояние большой–указательный, нормированное на размер ладони */
+    const thumb = hands[i][4], wrist = hands[i][0], mid = hands[i][9];
+    let pinching = true;
+    if(thumb && wrist && mid){
+      const hand = Math.hypot(mid.x-wrist.x, mid.y-wrist.y) || .2;
+      pinching = Math.hypot(thumb.x-lm.x, thumb.y-lm.y) / hand < .55;
+    }
+    const label = (res.handedness && res.handedness[i] && res.handedness[i][0] &&
+                   res.handedness[i][0].categoryName) || ("h"+i);
+    const key = "hand:" + label;
+    const x = m.ox + (1 - lm.x) * m.dw, y = m.oy + lm.y * m.dh;
+    const p = pointers.get(key);
+    if(p){ p.x += (x-p.x)*PROJECT.game.smoothing; p.y += (y-p.y)*PROJECT.game.smoothing;
+           p.lastSeen = nowMs; p.pinching = pinching; }
+    else pointers.set(key, { x, y, kind:"hand", lastSeen:nowMs, pinching });
+    seen.add(key);
+  }
+  for(const [key,p] of pointers)
+    if(p.kind === "hand" && !seen.has(key) && nowMs - p.lastSeen > 500) pointers.delete(key);
+}
+
+/* ==========================================================================
+   G. МЫШЬ / КАСАНИЕ — только в своём режиме
+   ========================================================================== */
+function stagePoint(e){ const r = stage.getBoundingClientRect(); return { x:e.clientX-r.left, y:e.clientY-r.top }; }
+canvas.addEventListener("pointermove", e => {
+  if(G.mode !== "pointer") return;
+  pointers.set("mouse", { ...stagePoint(e), kind:"mouse", lastSeen:performance.now() });
+});
+canvas.addEventListener("pointerdown", e => {
+  if(G.mode !== "pointer") return;
+  pointers.set("mouse", { ...stagePoint(e), kind:"mouse", lastSeen:performance.now(), tap:true });
+});
+canvas.addEventListener("pointerleave", () => pointers.delete("mouse"));
+canvas.addEventListener("pointercancel", () => pointers.delete("mouse"));
+
+/* ==========================================================================
+   H. РАУНДЫ И ОБЪЕКТЫ
+   ========================================================================== */
+function buildOrder(){
+  G.roundSeq = [];
+  /* плоская очередь заданий: раунды можно перемешать, задания внутри раунда идут по порядку */
+  const ri = PROJECT.rounds.map((_,i) => i);
+  const order = PROJECT.game.randomOrder ? shuffle(ri) : ri;
+  G.order = [];
+  for(const r of order){
+    G.roundSeq.push(r);
+    PROJECT.rounds[r].tasks.forEach((_, t) => G.order.push([r, t]));
+  }
+  G.taskPos = 0;
+}
+function loadTask(){
+  const [ri, ti] = G.order[G.taskPos];
+  G.round = PROJECT.rounds[ri];
+  G.task  = G.round.tasks[ti];
+  G.need  = neededFor(G.task);
+  G.done = 0; G.taskClosing = false; G.objects.length = 0;
+  elQuestion.textContent = G.task.question;
+  updateProgress();
+}
+function updateProgress(){
+  if(!G.round) return;
+  const ti = G.order[G.taskPos][1];
+  const taskTotal = G.round.tasks.length;
+  elProgress.textContent =
+    `Popped  ${G.done} / ${G.need}` +
+    (taskTotal > 1 ? `  ·  task ${ti+1} of ${taskTotal}` : "");
+}
+function baseRadius(){ return Math.min(G.w, G.h) * .085 * PROJECT.game.sizeScale * PROJECT.objects.style.scale; }
+
+/* стиль объекта: общий или собственный для ответа */
+function styleOf(item, round){
+  const base = PROJECT.objects.style;
+  const layers = [];
+  if(round && round.style) layers.push(round.style);
+  if(PROJECT.objects.perItem && item.style) layers.push(item.style);
+  if(!layers.length) return base;
+  const out = Object.assign({}, base);
+  for(const layer of layers)
+    for(const k in layer) if(layer[k] !== "" && layer[k] != null) out[k] = layer[k];
+  return out;
+}
+/* геометрия и область попадания — по реальной картинке, а не по кругу */
+function measure(b){
+  const s = b.style, r = b.r;
+  const objectIsItemPicture = (s.kind === "image" || s.kind === "sticker") && !s.skin && b.item.image;
+  b.objectIsItemPicture = Boolean(objectIsItemPicture);
+  const skinSrc = s.skin || (objectIsItemPicture ? b.item.image : "");
+  const img = getImage(skinSrc);
+  b.skinImg = img;
+  if((s.kind === "image" || s.kind === "sticker") && img){
+    const k = Math.min(r*2 / img.naturalWidth, r*2 / img.naturalHeight);
+    b.hw = img.naturalWidth * k / 2; b.hh = img.naturalHeight * k / 2; b.shape = "rect";
+  }else if(s.kind === "card"){
+    b.hw = r * 1.1; b.hh = r * .8; b.shape = "rect";
+  }else{
+    b.hw = b.hh = r; b.shape = "circle";
+  }
+  /* «какую область считать нажимаемой» — по умолчанию по форме объекта */
+  b.shape = s.hitShape === "circle" ? "circle" : s.hitShape === "rect" ? "rect" : b.shape;
+  b.hitScale = clamp(+s.hitScale || 1, .5, 1.6);
+}
+function hitTest(b, px, py){
+  const k = b.hitScale || 1;
+  if(b.shape === "rect") return Math.abs(px-b.x) <= b.hw*k && Math.abs(py-b.y) <= b.hh*k;
+  return Math.hypot(px-b.x, py-b.y) <= Math.max(b.hw, b.hh) * k;
+}
+function spawnObject(){
+  const items = G.task.objects;
+  const rights = items.filter(i => i.correct), wrongs = items.filter(i => !i.correct);
+  if(!rights.length) return;
+  const onScreen = G.objects.filter(b => !b.popping);
+  const needRight = !onScreen.some(b => b.item.correct);
+  const useRight = needRight || !wrongs.length || Math.random() < .45;
+  const pool = useRight ? rights : wrongs;
+  const free = pool.filter(it => !onScreen.some(b => b.item === it));
+  if(!free.length) return;
+  const item = pick(free);
+
+  const style = styleOf(item, G.round);
+  const r = baseRadius() * rand(.9, 1.12) * (style === PROJECT.objects.style ? 1 : (style.scale / PROJECT.objects.style.scale || 1));
+
+  /* направление полёта: задано учителем или своё у каждого объекта */
+  const setting = PROJECT.game.direction || "up";
+  const dir = setting === "random" ? pick(["up","down","left","right"]) : setting;
+  const horiz = dir === "left" || dir === "right";
+  const spd = (28 + PROJECT.game.speed*14) * rand(.85,1.15) / 60;
+  const top = G.hudBottom + r + 10;
+
+  let x = 0, y = 0, ok = false;
+  for(let t=0; t<16 && !ok; t++){
+    if(horiz){
+      x = dir === "right" ? -r-10 : G.w + r + 10;
+      y = rand(top, Math.max(top+1, G.h - r - 10));
+    }else{
+      x = rand(r+8, Math.max(r+9, G.w-r-8));
+      y = dir === "up" ? G.h + r + 10 : -r - 10;
+    }
+    ok = onScreen.every(b => Math.hypot(b.x-x, b.y-y) > (Math.max(b.hw,b.hh)+r) * 1.05);
+  }
+  if(!ok) return;
+  const b = {
+    id:G.nextId++, item, style, x, y, r,
+    hw:r, hh:r, shape:"circle", skinImg:null,
+    dir, horiz, entered:false, bounces:0, age:0,
+    vx: horiz ? (dir === "right" ? spd : -spd) : 0,
+    vy: horiz ? 0 : (dir === "up" ? -spd : spd),
+    sway:rand(.25,.7) * (Math.random()<.5 ? -1 : 1), phase:rand(0, Math.PI*2),
+    hue: item.correct ? rand(168,196) : rand(188,232),
+    contact:0, popping:0
+  };
+  measure(b);
+  G.objects.push(b);
+}
+function popObject(b, nowMs){
+  b.popping = 1; G.lastPop = nowMs;
+  playSound("pop");
+  for(let i=0;i<14;i++){
+    const a = rand(0, Math.PI*2), s = rand(.8,3.4);
+    G.sparks.push({ x:b.x, y:b.y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:1, hue:b.hue });
+  }
+  if(b.item.correct){
+    G.score += PROJECT.game.pointsRight; G.hits++; G.done++;
+    G.floaters.push({ x:b.x, y:b.y, text:"+"+PROJECT.game.pointsRight, life:1, color:"#ffc94a" });
+    playSound("correct"); updateProgress();
+    if(G.done >= G.need && !G.taskClosing){ G.taskClosing = true; setTimeout(nextTask, 650); }
+  }else{
+    G.score = Math.max(0, G.score - PROJECT.game.pointsWrong); G.misses++;
+    G.floaters.push({ x:b.x, y:b.y, text:"−"+PROJECT.game.pointsWrong, life:1, color:"#ef6f5c" });
+    playSound("wrong");
+    if(PROJECT.game.livesOn){
+      G.lives--; drawHearts(); playSound("life");
+      if(G.lives <= 0){ endGame(false); return; }
+    }
+  }
+  elScore.textContent = G.score;
+}
+function nextTask(){
+  if(G.phase !== "playing") return;
+  G.taskPos++;
+  if(G.taskPos >= G.order.length){ endGame(true); return; }
+  loadTask();
+}
+
+/* ==========================================================================
+   I. ОТРИСОВКА ОБЪЕКТА (одна функция и для игры, и для предпросмотра в панели)
+   ========================================================================== */
+function roundRect(c, x, y, w, h, r){
+  c.beginPath();
+  if(c.roundRect) c.roundRect(x, y, w, h, r);
+  else{
+    c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+    c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+  }
+}
+const FONTS = ["Baloo 2","Nunito","Georgia","Verdana","Trebuchet MS","Courier New","Comic Sans MS"];
+function fontCss(st, size){
+  return `${st.bold === false ? 400 : 700} ${size}px "${st.fontFamily || "Baloo 2"}","Nunito",sans-serif`;
+}
+/* подбор размера: текст не выходит за пределы объекта */
+function fitFont(c, text, maxWidth, start, st){
+  let size = Math.max(8, Math.round(start));
+  c.font = fontCss(st, size);
+  if(st.autoFit === false) return size;
+  while(c.measureText(text).width > maxWidth && size > 8){ size -= 1; c.font = fontCss(st, size); }
+  return size;
+}
+function paintText(c, text, x, y, size, st, maxWidth){
+  c.font = fontCss(st, size);
+  const align = st.textAlign || "center";
+  c.textAlign = align; c.textBaseline = "middle"; c.lineJoin = "round";
+  const ax = align === "left" ? x - maxWidth/2 : align === "right" ? x + maxWidth/2 : x;
+  if(st.textShadow){ c.save(); c.shadowColor = "rgba(0,0,0,.65)"; c.shadowBlur = size*.35; c.shadowOffsetY = size*.1; }
+  if(st.textOutline !== false){
+    c.lineWidth = Math.max(3, size*.22); c.strokeStyle = "rgba(6,28,40,.78)";
+    c.strokeText(text, ax, y, maxWidth);
+  }
+  c.fillStyle = st.textColor || "#ffffff";
+  c.fillText(text, ax, y, maxWidth);
+  if(st.textShadow) c.restore();
+  c.textAlign = "center";
+}
+/* подписи самой игры (+10, −5) — всегда одинаковые */
+function strokedText(c, text, x, y, size, color){
+  paintText(c, text, x, y, size,
+    { bold:true, fontFamily:"Baloo 2", textOutline:true, textAlign:"center", textColor:color }, 1e4);
+}
+function hexAlpha(hex, a){
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex||"").trim());
+  if(!m) return `rgba(141,156,86,${a})`;
+  const n = parseInt(m[1],16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+function drawObject(c, b){
+  const s = b.style;
+  const grow = b.popping ? 1 + b.popping*.5 : 1;
+  const alpha = (b.popping ? Math.max(0, 1-b.popping) : 1) * (s.opacity ?? 1);
+  if(alpha <= 0) return;
+  c.save();
+  c.globalAlpha = alpha;
+
+  /* кольцо прогресса удержания */
+  if(!b.popping && b.contact > 0){
+    const pct = Math.min(1, b.contact / PROJECT.game.contactMs);
+    const rr = Math.max(b.hw, b.hh) * grow + 6;
+    c.beginPath(); c.arc(b.x, b.y, rr, -Math.PI/2, -Math.PI/2 + pct*Math.PI*2);
+    c.strokeStyle = "#ffc94a"; c.lineWidth = 4; c.lineCap = "round"; c.stroke();
+  }
+
+  c.translate(b.x, b.y); c.scale(grow, grow);
+  if(s.glow > 0){ c.shadowColor = hexAlpha(s.color, .9); c.shadowBlur = +s.glow; }
+  else{ /* отрыв от светлого фона: без этого объект теряется на белой стене */
+    c.shadowColor = "rgba(34,36,21,.45)"; c.shadowBlur = b.r * .3; c.shadowOffsetY = b.r * .06; }
+
+  const kind = s.kind;
+  const hasSkin = Boolean(b.skinImg);
+
+  const flip = s.faceDirection && b.vx < 0;
+  if((kind === "image" || kind === "sticker") && hasSkin){
+    if(kind === "sticker"){
+      c.save(); if(flip) c.scale(-1,1);
+      c.shadowColor = "rgba(0,0,0,.55)"; c.shadowBlur = 10; c.shadowOffsetY = 3;
+      c.drawImage(b.skinImg, -b.hw, -b.hh, b.hw*2, b.hh*2); c.restore();
+      if(s.outline > 0){ c.lineWidth = +s.outline; c.strokeStyle = "#ffffff";
+        roundRect(c, -b.hw, -b.hh, b.hw*2, b.hh*2, Math.min(b.hw,b.hh)*.18); c.stroke(); }
+    }else{
+      c.save(); if(flip) c.scale(-1,1);
+      c.drawImage(b.skinImg, -b.hw, -b.hh, b.hw*2, b.hh*2); c.restore();
+      if(s.outline > 0){ c.lineWidth = +s.outline; c.strokeStyle = hexAlpha(s.color,.9);
+        roundRect(c, -b.hw, -b.hh, b.hw*2, b.hh*2, Math.min(b.hw,b.hh)*.18); c.stroke(); }
+    }
+  }else if(kind === "card"){
+    roundRect(c, -b.hw, -b.hh, b.hw*2, b.hh*2, Math.min(b.hw,b.hh)*.32);
+    const g = c.createLinearGradient(0,-b.hh,0,b.hh);
+    g.addColorStop(0, hexAlpha(s.color,.92)); g.addColorStop(1, hexAlpha(s.color,.6));
+    c.fillStyle = g; c.fill();
+    if(hasSkin){
+      c.save(); roundRect(c, -b.hw, -b.hh, b.hw*2, b.hh*2, Math.min(b.hw,b.hh)*.32); c.clip();
+      if(flip) c.scale(-1,1);
+      const k = Math.min(b.hw*1.8/b.skinImg.naturalWidth, b.hh*1.8/b.skinImg.naturalHeight);
+      const w = b.skinImg.naturalWidth*k, h = b.skinImg.naturalHeight*k;
+      c.drawImage(b.skinImg, -w/2, -h/2, w, h); c.restore();
+    }
+    if(s.outline > 0){ c.lineWidth = +s.outline; c.strokeStyle = "rgba(255,255,255,.75)"; c.stroke(); }
+  }else{
+    /* bubble / bubbleImage / glow и любой запасной вариант */
+    const r = b.r;
+    const g = c.createRadialGradient(-r*.35, -r*.4, r*.1, 0, 0, r);
+    if(kind === "glow"){
+      g.addColorStop(0, hexAlpha(s.color,.95)); g.addColorStop(.6, hexAlpha(s.color,.45));
+      g.addColorStop(1, hexAlpha(s.color,.05));
+    }else{
+      g.addColorStop(0, `hsla(${b.hue},78%,82%,.95)`);
+      g.addColorStop(.55, `hsla(${b.hue},62%,54%,.62)`);
+      g.addColorStop(1, `hsla(${b.hue},58%,36%,.38)`);
+    }
+    c.beginPath(); c.arc(0,0,r,0,Math.PI*2); c.fillStyle = g; c.fill();
+    if(s.outline > 0){
+      c.lineWidth = +s.outline;
+      c.strokeStyle = kind === "glow" ? hexAlpha(s.color,.9) : `hsla(${b.hue},80%,88%,.75)`;
+      c.stroke();
+    }
+    c.shadowBlur = 0;
+    if(kind !== "glow" && !hasSkin){
+      c.beginPath(); c.ellipse(-r*.34,-r*.4, r*.22, r*.14, -.5, 0, Math.PI*2);
+      c.fillStyle = "rgba(255,255,255,.72)"; c.fill();
+    }
+    if(hasSkin){
+      const k = Math.min(r*1.3/b.skinImg.naturalWidth, r*1.3/b.skinImg.naturalHeight);
+      const w = b.skinImg.naturalWidth*k, h = b.skinImg.naturalHeight*k;
+      c.save(); c.beginPath(); c.arc(0,0,r*.92,0,Math.PI*2); c.clip();
+      if(flip) c.scale(-1,1);
+      c.drawImage(b.skinImg, -w/2, -h/2, w, h); c.restore();
+    }
+  }
+  c.shadowBlur = 0;
+  drawContent(c, b);
+  c.restore();
+}
+/* слово, картинка или слово + картинка внутри объекта */
+function drawContent(c, b){
+  const s = b.style, item = b.item;
+  const text = s.hideText ? "" : (item.text || "");
+  const contentImg = b.objectIsItemPicture ? null : getImage(item.image);
+  const boxW = b.shape === "rect" ? b.hw*1.84 : b.r*1.5;
+  const boxH = b.shape === "rect" ? b.hh*1.84 : b.r*1.4;
+  const below = s.textPlace === "below" && text;
+  /* эмодзи без букв рисуем крупнее и без тёмной обводки — она их пачкает */
+  const emojiOnly = Boolean(text) && !/[\p{L}\p{N}]/u.test(text);
+  const st = emojiOnly ? Object.assign({}, s, { textOutline:false, textShadow:true }) : s;
+  const big = emojiOnly ? 1.45 : 1;
+
+  if(contentImg){
+    const availH = (text && !below) ? boxH*.62 : boxH;
+    const k = Math.min(boxW/contentImg.naturalWidth, availH/contentImg.naturalHeight);
+    const w = contentImg.naturalWidth*k, h = contentImg.naturalHeight*k;
+    const cy = (text && !below) ? -boxH*.5 + h/2 : 0;
+    c.drawImage(contentImg, -w/2, cy - h/2, w, h);
+    if(text && !below){
+      const size = fitFont(c, text, boxW, b.r*.4*s.fontScale*big, st);
+      paintText(c, text, 0, boxH*.5 - size*.55, size, st, boxW);
+    }
+  }else if(text && !below){
+    const size = fitFont(c, text, boxW, Math.max(b.hw,b.hh)*.46*s.fontScale*big, st);
+    paintText(c, text, 0, 0, size, st, boxW);
+  }
+  if(below){
+    const wide = Math.max(b.hw,b.hh)*2.6;
+    const size = fitFont(c, text, wide, Math.max(b.hw,b.hh)*.42*s.fontScale*big, st);
+    paintText(c, text, 0, b.hh + size*.9, size, st, wide);
+  }
+}
+
+/* ==========================================================================
+   J. ЦИКЛ
+   ========================================================================== */
+function loop(nowMs){
+  requestAnimationFrame(loop);
+  const dt = Math.min(50, nowMs - (G.lastT || nowMs));
+  G.lastT = nowMs;
+  if(G.mode === "hands") trackHands(nowMs);
+  if(G.phase === "playing"){
+    stepTimer(dt);
+    stepObjects(dt, nowMs);
+    /* если на поле не осталось верного ответа, выпускаем его вне очереди и сверх лимита */
+    const live = G.objects.filter(b => !b.popping);
+    const noRight = !live.some(b => b.item.correct);
+    if(nowMs > G.nextSpawn && (live.length < PROJECT.game.maxObjects || noRight)){
+      spawnObject();
+      G.nextSpawn = nowMs + (noRight ? 120 : rand(260, 620));
+    }
+  }
+  stepEffects(dt);
+  draw();
+  stepFx(dt, nowMs);
+  pvStep(dt);
+}
+function stepTimer(dt){
+  if(!PROJECT.game.timerOn) return;
+  G.timerAcc += dt;
+  while(G.timerAcc >= 1000){
+    G.timerAcc -= 1000; G.timeLeft--;
+    elTime.textContent = Math.max(0, G.timeLeft);
+    elTimeChip.classList.toggle("low", G.timeLeft <= 10);
+    if(G.timeLeft > 0 && G.timeLeft <= 5) playSound("countdown");
+    if(G.timeLeft <= 0){ endGame(false, true); return; }
+  }
+}
+const BOUNCE_LIFE_MS = 25000;   // сколько рыбка ходит туда-сюда, прежде чем уплыть
+/* объект жив, пока не ушёл за противоположный край */
+function onStage(b){
+  const m = 40;
+  if(b.horiz) return b.vx > 0 ? b.x - b.hw < G.w + m : b.x + b.hw > -m;
+  return b.vy < 0 ? b.y + b.hh > G.hudBottom + 4 : b.y - b.hh < G.h + m;
+}
+function stepObjects(dt, nowMs){
+  const f = dt/16.67;
+
+  /* 1. движение */
+  for(const b of G.objects){
+    if(b.popping){ b.popping += dt/260; continue; }
+    b.age += dt;
+    measure(b);
+    b.phase += .035*f;
+    const wobble = Math.sin(b.phase) * b.sway * f;
+    b.x += b.vx*f + (b.horiz ? 0 : wobble);
+    b.y += b.vy*f + (b.horiz ? wobble : 0);
+    if(!b.entered && b.x - b.hw > 0 && b.x + b.hw < G.w &&
+       b.y - b.hh > G.hudBottom && b.y + b.hh < G.h) b.entered = true;
+    if(b.horiz){
+      if(PROJECT.game.bounce && b.entered && b.age < BOUNCE_LIFE_MS){
+        if(b.x - b.hw <= 0 && b.vx < 0){ b.vx = -b.vx; b.bounces++; }
+        if(b.x + b.hw >= G.w && b.vx > 0){ b.vx = -b.vx; b.bounces++; }
+      }
+      b.y = clamp(b.y, G.hudBottom + b.hh, Math.max(G.hudBottom + b.hh, G.h - b.hh));
+    }else{
+      if(PROJECT.game.bounce && b.entered &&
+         ((b.x - b.hw <= 0 && b.sway < 0) || (b.x + b.hw >= G.w && b.sway > 0))) b.sway = -b.sway;
+      b.x = clamp(b.x, b.hw*.6, G.w - b.hw*.6);
+    }
+  }
+
+  /* 2. у каждого указателя ровно одна цель — ближайшая к кончику пальца.
+     Пузыри часто перекрываются, и без этого удержание копилось сразу у нескольких:
+     лопался не тот, на который целились, или два подряд. */
+  const targets = new Set();
+  if(nowMs - G.lastPop >= PROJECT.game.popCooldown){
+    for(const p of pointers.values()){
+      if(PROJECT.game.input === "pinch" && p.kind === "hand" && !p.pinching) continue;
+      let best = null, bestDist = Infinity;
+      for(const b of G.objects){
+        if(b.popping || !hitTest(b, p.x, p.y)) continue;
+        const dist = Math.hypot(p.x - b.x, p.y - b.y) / Math.max(b.hw, b.hh, 1);
+        if(dist < bestDist){ bestDist = dist; best = b; }
+      }
+      if(best){
+        targets.add(best);
+        if(p.tap){ best.contact = PROJECT.game.contactMs + 1; p.tap = false; }
+      }
+    }
+  }
+
+  /* 3. удержание */
+  for(const b of G.objects){
+    if(b.popping) continue;
+    b.contact = targets.has(b) ? b.contact + dt : Math.max(0, b.contact - dt*.6);
+  }
+
+  /* 4. за кадр лопается не больше одного объекта — того, что держали дольше */
+  const ready = G.objects.filter(b => !b.popping && b.contact >= PROJECT.game.contactMs);
+  if(ready.length){
+    ready.sort((a, b) => b.contact - a.contact);
+    for(const b of ready.slice(1)) b.contact = 0;
+    popObject(ready[0], nowMs);
+  }
+
+  G.objects = G.objects.filter(b => b.popping ? b.popping < 1.6 : onStage(b));
+}
+function stepEffects(dt){
+  const f = dt/16.67;
+  for(const s of G.sparks){ s.x += s.vx*f; s.y += s.vy*f; s.vy += .07*f; s.life -= .022*f; }
+  G.sparks = G.sparks.filter(s => s.life > 0);
+  for(const t of G.floaters){ t.y -= .9*f; t.life -= .016*f; }
+  G.floaters = G.floaters.filter(t => t.life > 0);
+}
+function draw(){
+  ctx.clearRect(0,0,G.w,G.h);
+  for(const b of G.objects) drawObject(ctx, b);
+  for(const s of G.sparks){
+    ctx.globalAlpha = Math.max(0, s.life);
+    ctx.beginPath(); ctx.arc(s.x, s.y, 3.2, 0, Math.PI*2);
+    ctx.fillStyle = `hsl(${s.hue},80%,74%)`; ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  for(const t of G.floaters){
+    ctx.globalAlpha = Math.max(0, t.life);
+    strokedText(ctx, t.text, t.x, t.y, 26, t.color);
+  }
+  ctx.globalAlpha = 1;
+  if((G.phase === "playing" || G.phase === "paused") && PROJECT.game.showPointer !== false)
+    for(const p of pointers.values()) drawPointer(p);
+}
+function drawPointer(p){
+  /* в режиме Pinch открытая ладонь рисуется пунктиром — сразу видно,
+     что игра ждёт сведённые пальцы, а не просто касание */
+  const waiting = PROJECT.game.input === "pinch" && p.kind === "hand" && !p.pinching;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(p.x, p.y, 22, 0, Math.PI*2);
+  ctx.fillStyle = waiting ? "rgba(34,36,21,.14)" : "rgba(227,181,68,.22)"; ctx.fill();
+  ctx.beginPath(); ctx.arc(p.x, p.y, 15, 0, Math.PI*2);
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 3;
+  if(waiting) ctx.setLineDash([5, 5]);
+  ctx.stroke(); ctx.setLineDash([]);
+  if(!waiting){
+    ctx.beginPath(); ctx.arc(p.x, p.y, 4.5, 0, Math.PI*2); ctx.fillStyle = "#e3b544"; ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* ==========================================================================
+   K. ФИНАЛЬНЫЕ ЭФФЕКТЫ — рисуются на отдельном холсте поверх экрана итогов
+   ========================================================================== */
+/* все выбранные эффекты идут одновременно; у каждого свой таймер «залпов» */
+const FX = { parts:[], types:[], type:null, emitUntil:0, endAt:0, intensity:3, dur:3, bursts:{} };
+/* светлая тема: белого и пастели здесь быть не должно — на кремовом экране их не видно */
+const FX_COLORS = ["#e0a21c","#2c8f87","#d24d2c","#2d7fb8","#7b3fd4","#4a9b2f","#c2256f"];
+
+function playEffects(cfg){
+  if(!cfg) return;
+  const types = (cfg.types || []).filter(t => t && t !== "none");
+  if(!types.length){ FX.types = []; FX.type = null; return; }
+  const now = performance.now();
+  FX.types = types.slice();
+  FX.type = types[0];
+  FX.intensity = clamp(+cfg.intensity || 3, 1, 5);
+  FX.dur = clamp(+cfg.duration || 3, .5, 15);
+  FX.emitUntil = now + FX.dur*1000;
+  FX.endAt = FX.emitUntil + 1500;
+  FX.bursts = {};
+}
+function addPart(p){ if(FX.parts.length < 2200) FX.parts.push(p); }
+/* «не чаще, чем раз в N мс» — отдельно для каждого эффекта */
+function burstReady(type, now, gap){
+  if(now - (FX.bursts[type] || 0) < gap) return false;
+  FX.bursts[type] = now; return true;
+}
+
+function emit(type, now){
+  const n = FX.intensity, w = G.w, h = G.h;
+  if(type === "confetti"){
+    for(let i=0;i<n;i++) addPart({ kind:"rect", x:rand(0,w), y:-20, vx:rand(-1.6,1.6), vy:rand(2,4.5),
+      g:.03, rot:rand(0,6.3), vr:rand(-.22,.22), w:rand(7,13), h:rand(9,17),
+      color:pick(FX_COLORS), life:1, decay:.0045 });
+  }
+  else if(type === "spark"){
+    for(let i=0;i<n*3;i++) addPart({ kind:"spark", x:w/2 + rand(-w*.045,w*.045), y:h+10,
+      vx:rand(-1.3,1.3), vy:-rand(9,15+n), g:.24, color:i%3 ? "#e0a21c" : "#d24d2c",
+      size:rand(2,4), life:1, decay:.012 });
+  }
+  else if(type === "fireworks"){
+    if(!burstReady("fireworks", now, 430)) return;
+    const cx = rand(w*.2,w*.8), cy = rand(h*.15,h*.55), hue = rand(0,360), count = 20 + n*9;
+    for(let i=0;i<count;i++){ const a = (i/count)*Math.PI*2 + rand(-.08,.08), s = rand(2, 4+n);
+      addPart({ kind:"circle", x:cx, y:cy, vx:Math.cos(a)*s, vy:Math.sin(a)*s, g:.06,
+        size:rand(2,3.6), color:`hsl(${hue + rand(-25,25)},90%,68%)`, life:1, decay:.013 }); }
+  }
+  else if(type === "stars"){
+    if(!burstReady("stars", now, 620)) return;
+    const cx = w/2, cy = h*.45, count = 10 + n*5;
+    for(let i=0;i<count;i++){ const a = rand(0,Math.PI*2), s = rand(3, 7+n);
+      addPart({ kind:"star", x:cx, y:cy, vx:Math.cos(a)*s, vy:Math.sin(a)*s, g:.045,
+        size:rand(8,18), rot:rand(0,6.3), vr:rand(-.12,.12), color:pick(["#e0a21c","#d8921a","#c2256f"]),
+        life:1, decay:.011 }); }
+  }
+  else if(type === "magic"){
+    for(let i=0;i<n*2;i++) addPart({ kind:"dust", x:rand(0,w), y:h+12, vx:rand(-.3,.3), vy:-rand(.6,1.9),
+      g:-.002, size:rand(1.8,4.4), phase:rand(0,6.3), color:pick(["#7b3fd4","#2d7fb8","#d08c12","#2c8f87"]),
+      life:1, decay:.0055 });
+  }
+  else if(type === "balloons"){
+    if(!burstReady("balloons", now, 300)) return;
+    for(let i=0;i<Math.max(1, Math.round(n/2)); i++)
+      addPart({ kind:"balloon", x:rand(w*.08,w*.92), y:h+50, vx:rand(-.25,.25), vy:-rand(.9,1.7+n*.12),
+        g:0, size:rand(17,30), phase:rand(0,6.3), color:pick(FX_COLORS), life:1, decay:.0035 });
+  }
+  else if(type === "rain"){
+    for(let i=0;i<n*4;i++) addPart({ kind:"drop", x:rand(-40,w), y:-20,
+      vx:1.1, vy:rand(11,17), g:.06, size:rand(9,17), color:"rgba(50,96,130,.85)",
+      life:1, decay:.012 });
+  }
+  else if(type === "storm"){
+    if(burstReady("storm", now, 900)){
+      addPart({ kind:"flash", x:w/2, y:h/2, vx:0, vy:0, g:0, size:0, color:"rgba(40,44,26,.5)",
+        life:1, decay:.08 });
+    }
+    for(let i=0;i<n*3;i++) addPart({ kind:"drop", x:rand(-40,w), y:-20,
+      vx:2.2, vy:rand(13,20), g:.06, size:rand(10,20), color:"rgba(38,72,100,.92)",
+      life:1, decay:.013 });
+  }
+  else if(type === "deadfish"){
+    if(!burstReady("deadfish", now, 260)) return;
+    for(let i=0;i<Math.max(1, Math.round(n/2)); i++)
+      addPart({ kind:"glyph", char:"🐟", x:rand(w*.08,w*.92), y:-30,
+        vx:rand(-.4,.4), vy:rand(1.4,2.6), g:.01, size:rand(26,48),
+        rot:Math.PI, vr:rand(-.012,.012), phase:rand(0,6.3), color:"#fff", life:1, decay:.0045 });
+  }
+  else if(type === "sadfaces"){
+    if(!burstReady("sadfaces", now, 300)) return;
+    for(let i=0;i<Math.max(1, Math.round(n/2)); i++)
+      addPart({ kind:"glyph", char:pick(SAD_FACES), x:rand(w*.08,w*.92), y:-30,
+        vx:rand(-.5,.5), vy:rand(1.2,2.4), g:.012, size:rand(28,54),
+        rot:rand(-.25,.25), vr:rand(-.01,.01), phase:rand(0,6.3), color:"#fff", life:1, decay:.005 });
+  }
+  else if(type === "bubbles"){
+    if(!burstReady("bubbles", now, 150)) return;
+    for(let i=0;i<n*2;i++){ const a = rand(0,Math.PI*2), s = rand(1.5, 5+n);
+      addPart({ kind:"ring", x:w/2, y:h*.5, vx:Math.cos(a)*s, vy:Math.sin(a)*s, g:-.01,
+        size:rand(8,26), grow:rand(.1,.45), color:pick(["#2d7fb8","#2c8f87","#5a9ec4"]),
+        life:1, decay:.01 }); }
+  }
+}
+function stepFx(dt, now){
+  if(FX.types.length){
+    if(now < FX.emitUntil) for(const t of FX.types) emit(t, now);
+    else if(now > FX.endAt){ FX.types = []; FX.type = null; }
+  }
+  const f = dt/16.67;
+  for(const p of FX.parts){
+    p.vy += (p.g || 0) * f;
+    p.x += p.vx * f + (p.kind === "dust" || p.kind === "balloon" || p.kind === "glyph"
+      ? Math.sin((p.phase += .04*f)) * .5 * f : 0);
+    p.y += p.vy * f;
+    if(p.vr) p.rot = (p.rot || 0) + p.vr * f;
+    if(p.grow) p.size += p.grow * f;
+    p.life -= p.decay * f;
+  }
+  FX.parts = FX.parts.filter(p => p.life > 0 && p.y < G.h + 120 && p.y > -220);
+
+  fx.clearRect(0, 0, G.w, G.h);
+  if(!FX.parts.length){
+    if(!FX.types.length) fxCanvas.classList.remove("above");
+    return;
+  }
+  for(const p of FX.parts){
+    fx.save();
+    fx.globalAlpha = clamp(p.life, 0, 1);
+    fx.translate(p.x, p.y);
+    if(p.rot) fx.rotate(p.rot);
+    fx.fillStyle = p.color; fx.strokeStyle = p.color;
+    if(p.kind === "rect"){ fx.fillRect(-p.w/2, -p.h/2, p.w, p.h); }
+    else if(p.kind === "circle"){ fx.beginPath(); fx.arc(0,0,p.size,0,Math.PI*2); fx.fill(); }
+    else if(p.kind === "dust"){
+      fx.shadowColor = p.color; fx.shadowBlur = 8;
+      fx.beginPath(); fx.arc(0,0,p.size,0,Math.PI*2); fx.fill();
+    }
+    else if(p.kind === "spark"){
+      fx.lineWidth = p.size; fx.lineCap = "round";
+      fx.beginPath(); fx.moveTo(0,0); fx.lineTo(-p.vx*2, -p.vy*2.2); fx.stroke();
+    }
+    else if(p.kind === "star"){
+      fx.beginPath();
+      for(let i=0;i<10;i++){ const r = i%2 ? p.size*.42 : p.size, a = (i/10)*Math.PI*2 - Math.PI/2;
+        i ? fx.lineTo(Math.cos(a)*r, Math.sin(a)*r) : fx.moveTo(Math.cos(a)*r, Math.sin(a)*r); }
+      fx.closePath(); fx.fill();
+    }
+    else if(p.kind === "balloon"){
+      fx.beginPath(); fx.ellipse(0,0,p.size*.8,p.size,0,0,Math.PI*2); fx.fill();
+      fx.lineWidth = 1.2; fx.globalAlpha *= .6;
+      fx.beginPath(); fx.moveTo(0,p.size); fx.quadraticCurveTo(p.size*.4, p.size*1.9, 0, p.size*2.6); fx.stroke();
+    }
+    else if(p.kind === "drop"){
+      fx.strokeStyle = p.color; fx.lineWidth = 2; fx.lineCap = "round";
+      fx.beginPath(); fx.moveTo(0,0); fx.lineTo(-p.vx*1.2, -p.size); fx.stroke();
+    }
+    else if(p.kind === "glyph"){
+      fx.font = `${p.size}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+      fx.textAlign = "center"; fx.textBaseline = "middle";
+      fx.fillText(p.char, 0, 0);
+    }
+    else if(p.kind === "flash"){
+      fx.setTransform(1,0,0,1,0,0);
+      fx.fillStyle = p.color; fx.globalAlpha = clamp(p.life,0,1) * .5;
+      fx.fillRect(0,0,G.w,G.h);
+      fx.setTransform(G.dpr,0,0,G.dpr,0,0);
+    }
+    else if(p.kind === "ring"){
+      fx.lineWidth = 2.2; fx.beginPath(); fx.arc(0,0,p.size,0,Math.PI*2); fx.stroke();
+      fx.globalAlpha *= .25; fx.beginPath(); fx.arc(0,0,p.size,0,Math.PI*2); fx.fill();
+    }
+    fx.restore();
+  }
+}
+
+/* ==========================================================================
+   L. ЭКРАНЫ И ХОД ИГРЫ
+   ========================================================================== */
+function drawHearts(){
+  if(!PROJECT.game.livesOn){ elHearts.innerHTML = ""; return; }
+  const icon = (PROJECT.game.lifeIcon || "❤️").trim();
+  const isPic = /^(https?:|data:)/i.test(icon);
+  let html = "";
+  for(let i=0;i<PROJECT.game.lives;i++){
+    const cls = "heart" + (i < G.lives ? "" : " gone");
+    html += isPic ? `<img class="${cls}" src="${icon}" alt="">`
+                  : `<span class="${cls}">${icon}</span>`;
+  }
+  elHearts.innerHTML = html;
+}
+function showScreen(which){
+  menuScreen.hidden  = which !== "menu";
+  pauseScreen.hidden = which !== "pause";
+  overScreen.hidden  = which !== "over";
+}
+function startGame(mode){
+  closeEditor();
+  initAudio();
+  preloadImages();
+  G.mode = mode; pointers.clear();
+  canvas.style.cursor = mode === "hands" ? "none" : "default";
+  G.score = 0; G.lives = PROJECT.game.lives; G.timeLeft = PROJECT.game.timerSeconds;
+  G.hits = 0; G.misses = 0; G.timerAcc = 0; G.lastPop = -1e9;
+  G.sparks.length = 0; G.floaters.length = 0; FX.parts.length = 0; FX.types.length = 0; FX.type = null;
+  elScore.textContent = "0"; elTime.textContent = PROJECT.game.timerSeconds;
+  elTimeChip.hidden = !PROJECT.game.timerOn; elTimeChip.classList.remove("low");
+  drawHearts(); buildOrder(); loadTask(); applyStageOptions();
+  hud.hidden = false; resize(); showScreen(null);
+  G.phase = "playing";
+}
+/* показ камеры, кнопок паузы и полного экрана — настройки учителя */
+function applyStageOptions(){
+  video.style.opacity = PROJECT.game.showCamera === false ? "0" : "";
+  stage.style.setProperty("--vig", String(clamp(+PROJECT.game.vignette || 0, 0, .85)));
+  const pb = $("btnPause"), fb = $("btnFull");
+  if(pb) pb.hidden = PROJECT.game.showPause === false;
+  if(fb) fb.hidden = PROJECT.game.showFullscreen === false;
+}
+function pauseGame(){ if(G.phase !== "playing") return; G.phase = "paused"; showScreen("pause"); }
+function resumeGame(){ if(G.phase !== "paused") return; G.phase = "playing"; G.lastT = performance.now(); showScreen(null); }
+function endGame(won, timeUp=false){
+  if(G.phase === "over") return;
+  G.phase = "over";
+  const total = G.hits + G.misses;
+  $("finalScore").textContent = G.score;
+  $("finalHits").textContent = G.hits;
+  $("finalAcc").textContent = total ? Math.round(G.hits/total*100) + "%" : "—";
+  $("overTitle").textContent = won ? "All rounds done!" : (timeUp ? "Time is up" : "Out of lives");
+  $("overText").textContent = won
+    ? "Every round is finished. Try again and beat your score."
+    : (timeUp ? "The clock ran out — there is always another go."
+              : "The objects won this time. Ready for another round?");
+  playSound(won ? "victory" : "gameover");
+  playEffects(PROJECT.effects[won ? "victory" : "gameover"]);
+  showScreen("over");
+}
+function toMenu(){
+  G.phase = "menu";
+  G.objects.length = 0; G.sparks.length = 0; G.floaters.length = 0;
+  FX.parts.length = 0; FX.types.length = 0; FX.type = null;
+  pointers.clear(); canvas.style.cursor = "default";
+  hud.hidden = true; closeCamera(); say(""); showScreen("menu");
+}
+
+/* ==========================================================================
+   M. РЕДАКТОР
+   ========================================================================== */
+const editor = $("editor"), edPanes = $("edPanes");
+const EDIT = { sec:"content", ri:0, ti:0, csv:null };
+
+function getPath(o, p){ return p.split(".").reduce((a,k) => (a == null ? a : a[k]), o); }
+function setPath(o, p, v){
+  const ks = p.split("."), last = ks.pop();
+  let t = o;
+  for(const k of ks){ if(t[k] == null) t[k] = {}; t = t[k]; }
+  t[last] = v;
+}
+function curRound(){ EDIT.ri = clamp(EDIT.ri, 0, PROJECT.rounds.length-1); return PROJECT.rounds[EDIT.ri]; }
+function curTask(){ const r = curRound(); EDIT.ti = clamp(EDIT.ti, 0, r.tasks.length-1); return r.tasks[EDIT.ti]; }
+
+const ask = msg => { try{ return window.confirm(msg); }catch(e){ return true; } };
+const confirmLoss = msg => !dirty || ask(msg);
+/* проверка целостности загружаемого файла */
+function validateProject(obj){
+  if(!obj || typeof obj !== "object") throw new Error("not a project file");
+  if(!Array.isArray(obj.rounds)) throw new Error("no rounds inside");
+  const tasks = obj.rounds.reduce((n,r) => n + ((r.tasks || []).length || (r.items ? 1 : 0)), 0);
+  if(!tasks) throw new Error("no tasks inside");
+  return true;
+}
+function openEditor(){ editor.hidden = false; renderEditor(); }
+function closeEditor(){ editor.hidden = true; }
+
+/* ---------- общее связывание ---------- */
+function syncInputs(){
+  editor.querySelectorAll("[data-bind]").forEach(el => {
+    const v = getPath(PROJECT, el.dataset.bind);
+    if(el.type === "checkbox") el.checked = Boolean(v);
+    else if(v != null) el.value = v;
+  });
+  editor.querySelectorAll("[data-out]").forEach(el => {
+    const v = getPath(PROJECT, el.dataset.out);
+    el.textContent = typeof v === "number" ? (Math.round(v*100)/100) : v;
+  });
+  editor.querySelectorAll("[data-fx]").forEach(el => {
+    const list = getPath(PROJECT, el.dataset.fx) || [];
+    el.classList.toggle("on", list.includes(el.dataset.val));
+  });
+  const thumb = $("skinThumb"), skin = PROJECT.objects.style.skin;
+  if(thumb){ thumb.src = skin || ""; thumb.style.visibility = skin ? "visible" : "hidden"; }
+  const lt = $("lifeThumb"), icon = (PROJECT.game.lifeIcon || "").trim();
+  if(lt){
+    const pic = /^(https?:|data:)/i.test(icon);
+    lt.src = pic ? icon : ""; lt.style.visibility = pic ? "visible" : "hidden";
+  }
+  drawHearts();
+  const note = $("sizeNote");
+  if(note){
+    const kb = Math.round(JSON.stringify(PROJECT).length / 1024);
+    note.textContent = `Project size: ${kb} KB` + (kb > 3000 ? " — large, pictures by URL keep it light." : "");
+  }
+  pvRebuild();
+}
+editor.addEventListener("input", e => {
+  const el = e.target, p = el.dataset.bind;
+  if(!p) return;
+  let v;
+  if(el.type === "checkbox") v = el.checked;
+  else if(el.type === "number" || el.type === "range") v = parseFloat(el.value);
+  else v = el.value === "true" ? true : el.value === "false" ? false : el.value;
+  setPath(PROJECT, p, v);
+  if(/^game\.(show|input)/.test(p) && G.phase !== "menu") applyStageOptions();
+  if(/\.(image|skin)$/.test(p)){
+    getImage(v);
+    const th = editor.querySelector(`[data-thumb="${p}"]`);
+    if(th){ th.src = v || ""; th.style.visibility = v ? "visible" : "hidden"; }
+  }
+  if(/^rounds\.\d+\.tasks\.\d+\.(type|objects\.\d+\.correct)$/.test(p)){
+    const t = curTask(); t.need = neededFor(t); renderRound();
+  }
+  if(p === "objects.perItem") renderRound();
+  if(/^rounds\.\d+\.name$/.test(p)) renderRoundsBar();
+  if(/^rounds\.\d+\.tasks\.\d+\.question$/.test(p)) renderRoundsBar();
+  if(el.dataset.rerender === "audio") renderAudio();
+  if(p === "game.lives" || p === "game.livesOn") drawHearts();
+  syncInputs(); saveProject();
+});
+editor.addEventListener("change", e => {
+  const el = e.target;
+  if(el.type === "file" && el.dataset.file && el.files && el.files[0]) readFileInto(el);
+});
+function readFileInto(el){
+  const file = el.files[0], path = el.dataset.file;
+  const limitMb = el.dataset.audio ? 4 : 3;
+  if(file.size > limitMb*1024*1024){
+    toast(`That file is ${(file.size/1048576).toFixed(1)} MB — keep it under ${limitMb} MB, or use a URL instead.`);
+    el.value = ""; return;
+  }
+  const fr = new FileReader();
+  fr.onload = () => {
+    setPath(PROJECT, path, fr.result);
+    if(el.dataset.audio){
+      setPath(PROJECT, `audio.${el.dataset.audio}.mode`, "custom");
+      setPath(PROJECT, `audio.${el.dataset.audio}.name`, file.name);
+      renderAudio();
+    }
+    getImage(fr.result);
+    renderRound(); syncInputs(); saveProject();
+    toast("Added " + file.name);
+  };
+  fr.onerror = () => toast("That file could not be read.");
+  fr.readAsDataURL(file);
+  el.value = "";
+}
+
+/* ---------- ЭМОДЗИ ПО ГРУППАМ ---------- */
+const EMOJI = [
+  ["Smileys", "😀😁😂😃😄😅😆😇😈😉😊😋😌😍😎😏😐😑😒😓😔😕😖😗😘😙😚😛😜😝😞😟😠😡😢😣😤😥😦😧😨😩😪😫😬😭😮😯😰😱😲😳😴😵😶😷😸😹😺😻😼😽😾😿🙀🙁🙂🙃🙄🙅🙆🙇🙈🙉🙊🙋🙌🙍🙎🙏🤐🤑🤒🤓🤔🤕🤖🤗🤘🤙🤚🤛🤜🤝🤞🤟🤠🤡🤢🤣🤤🤥🤦🤧🤨🤩🤪🤫🤬🤭🤮🤯🥰🥱🥲🥳🥴🥵🥶🥷🥸🥹🥺☺️☹️"],
+  ["People", "👦👧👨👩👪👫👬👭👮👯👰👱👲👳👴👵👶👷👸👹👺👻👼👽👾👿💀💁💂💃💄💅💆💇🧑🧒🧓🧔🧕🧖🧗🧘🧙🧚🧛🧜🧝🧞🧟👀👁👂👃👄👅👆👇👈👉👊👋👌👍👎👏👐🖐🖑🖒🖓🖔🖕🖖✊️✋️✌️✍️"],
+  ["Animals", "🐀🐁🐂🐃🐄🐅🐆🐇🐈🐉🐊🐋🐌🐍🐎🐏🐐🐑🐒🐓🐔🐕🐖🐗🐘🐙🐚🐛🐜🐝🐞🐟🐠🐡🐢🐣🐤🐥🐦🐧🐨🐩🐪🐫🐬🐭🐮🐯🐰🐱🐲🐳🐴🐵🐶🐷🐸🐹🐺🐻🐼🐽🐾🐿🦀🦁🦂🦃🦄🦅🦆🦇🦈🦉🦊🦋🦌🦍🦎🦏🦐🦑🦒🦓🦔🦕🦖🦗🦘🦙🦚🦛🦜🦝🦞🦟🦠🦡🦢🦣🦤🦥🦦🦧🦨🦩🦪🦫🦬🦭🦮🌰🌱🌲🌳🌴🌵🌶🌷🌸🌹🌺🌻🌼🌽🌾🌿🍀🍁🍂🍃🌀🌁🌂🌃🌄🌅🌆🌇🌈🌉🌊🌋🌌🌍🌎🌏🌐🌑🌒🌓🌔🌕🌖🌗🌘🌙🌚🌛🌜🌝🌞🌟🌠🌡☀️☁️☂️☃️☄️⛄️⛅️⛆️⛇️⛈️"],
+  ["Food", "🍄🍅🍆🍇🍈🍉🍊🍋🍌🍍🍎🍏🍐🍑🍒🍓🍔🍕🍖🍗🍘🍙🍚🍛🍜🍝🍞🍟🍠🍡🍢🍣🍤🍥🍦🍧🍨🍩🍪🍫🍬🍭🍮🍯🍰🍱🍲🍳🍴🍵🍶🍷🍸🍹🍺🍻🍼🍽🍾🍿🥐🥑🥒🥓🥔🥕🥖🥗🥘🥙🥚🥛🥜🥝🥞🥟🥠🥡🥢🥣🥤🥥🥦🥧🥨🥩🥪🥫🥬🥭🥮🥯🌭🌮🌯"],
+  ["Travel", "🚀🚁🚂🚃🚄🚅🚆🚇🚈🚉🚊🚋🚌🚍🚎🚏🚐🚑🚒🚓🚔🚕🚖🚗🚘🚙🚚🚛🚜🚝🚞🚟🚠🚡🚢🚣🚤🚲🚳🚴🚵🚶🚷🚸🚹🏠🏡🏢🏣🏤🏥🏦🏧🏨🏩🏪🏫🏬🏭🏮🏯🏰🗺🗻🗼🗽🗾🗿⛲️⛳️⛴️⛵️✈️⛽️"],
+  ["Activity", "🎠🎡🎢🎣🎤🎥🎦🎧🎨🎩🎪🎫🎬🎭🎮🎯🎰🎱🎲🎳🎴🎵🎶🎷🎸🎹🎺🎻🎼🎽🎾🎿🏀🏁🏂🏃🏄🏅🏆🏇🏈🏉🏊🏏🏐🏑🏒🏓🏔🏕🏖🏗🏘🏙🏚🥅🥆🥇🥈🥉🥊🥋🥌⚽️⚾️⛳️🤹🤺🤻🤼🤽🤾🤿"],
+  ["Objects", "💡💢💣💤💥💦💧💨💩💪💫💬💭💮💯💰💱💲💳💴💵💶💷💸💹💺💻💼💽💾💿📀📁📂📃📄📅📆📇📈📉📊📋📌📍📎📏📐📑📒📓📔📕📖📗📘📙📚📛📜📝📞📟📠📡📢📣📤📥📦📧📨📩📪📫📬📭📮📯📰📱📲📳📴📵📶📷📸📹📺📻📼📽📾📿🔦🔧🔨🔩🔪🔫🔬🔭🔮🔯🛋🛌🛍🛎🛏🛐🧰🧱🧲🧳🧴🧵🧶🧷🧸🧹🧺🧻🧼🧽🧾🧿✏️✐️✑️✒️✂️"],
+  ["Symbols", "❤️💓💔💕💖💗💘💙💚💛💜💝💞💟💠🔴🔵🔶🔷🔸🔹🔺🔻🔼🔽🟠🟡🟢🟣🟤🟥🟦🟧🟨🟩🟪🟫✅️❌️❍️❎️➕️➖️➗️⬅️⬆️⬇️➡️❓️❔️❕️❖️❗️🔀🔁🔂🔃🔄🔅🔆🔇🔈🔉🔊🔋🔌🔍"],
+  ["Flags", "🇬🇧🇺🇸🇮🇹🇫🇷🇩🇪🇪🇸🇵🇹🇳🇱🇵🇱🇺🇦🇷🇺🇨🇿🇬🇷🇹🇷🇸🇪🇳🇴🇩🇰🇫🇮🇮🇪🇨🇭🇦🇹🇧🇪🇭🇺🇷🇴🇯🇵🇨🇳🇰🇷🇮🇳🇹🇭🇻🇳🇮🇩🇵🇭🇦🇺🇳🇿🇨🇦🇲🇽🇧🇷🇦🇷🇨🇱🇨🇴🇵🇪🇪🇬🇿🇦🇳🇬🇰🇪🇲🇦🇮🇱🇸🇦🇦🇪🏁🏳️🏴"],
+]
+/* эмодзи в одном символе может быть несколько кодовых единиц — режем по графемам */
+const splitEmoji = str => Array.from(
+  typeof Intl !== "undefined" && Intl.Segmenter
+    ? Array.from(new Intl.Segmenter().segment(str), x => x.segment)
+    : [...str].filter(Boolean)
+);
+let emojiTarget = null, emojiGroup = 0;
+const picker = $("emojiPicker");
+function renderEmoji(){
+  $("emojiGroups").innerHTML = EMOJI.map((g,i) =>
+    `<button data-emoji-group="${i}" class="${i === emojiGroup ? "on" : ""}">${g[0]}</button>`).join("");
+  $("emojiGrid").innerHTML = splitEmoji(EMOJI[emojiGroup][1])
+    .map(e => `<button data-emoji="${e}" title="${e}">${e}</button>`).join("");
+}
+function openEmoji(btn, path){
+  emojiTarget = path;
+  renderEmoji();
+  picker.hidden = false;
+  const r = btn.getBoundingClientRect(), host = editor.getBoundingClientRect();
+  const left = Math.min(r.left - host.left, host.width - picker.offsetWidth - 12);
+  const below = r.bottom - host.top + 6;
+  picker.style.left = Math.max(8, left) + "px";
+  picker.style.top  = (below + picker.offsetHeight > host.height
+    ? Math.max(8, r.top - host.top - picker.offsetHeight - 6) : below) + "px";
+}
+function closeEmoji(){ picker.hidden = true; emojiTarget = null; }
+picker.addEventListener("click", e => {
+  const g = e.target.closest("[data-emoji-group]");
+  if(g){ emojiGroup = +g.dataset.emojiGroup; renderEmoji(); return; }
+  const b = e.target.closest("[data-emoji]");
+  if(!b || !emojiTarget) return;
+  const cur = getPath(PROJECT, emojiTarget) || "";
+  const next = cur ? (cur + " " + b.dataset.emoji).trim() : b.dataset.emoji;
+  setPath(PROJECT, emojiTarget, next);
+  const field = editor.querySelector(`[data-bind="${emojiTarget}"]`);
+  if(field) field.value = next;
+  syncInputs(); saveProject();
+});
+document.addEventListener("pointerdown", e => {
+  if(picker.hidden) return;
+  /* цель события не всегда элемент (документ, текстовый узел) — без проверки тут падало */
+  const el = e.target && e.target.nodeType === 1 ? e.target : null;
+  if(!el || (!picker.contains(el) && !el.closest("[data-emoji-for]"))) closeEmoji();
+});
+
+/* ---------- CONTENT ---------- */
+function renderRoundsBar(){
+  $("roundsBar").innerHTML = `<div class="chips">
+    ${PROJECT.rounds.map((r,i) => `<button data-round="${i}" class="${i===EDIT.ri?"on":""}">${esc(r.name)}</button>`).join("")}
+    <button class="add" data-add-round>+ Round</button>
+  </div>`;
+}
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+function objectHtml(ri, ti, oi, o){
+  const p = `rounds.${ri}.tasks.${ti}.objects.${oi}`;
+  return `<div class="item${o.correct ? " right" : ""}">
+    <div class="top">
+      <img class="thumb" data-thumb="${p}.image" src="${esc(o.image)}" alt=""
+           style="visibility:${o.image ? "visible" : "hidden"}">
+      <input type="text" placeholder="Word or emoji" data-bind="${p}.text" value="${esc(o.text)}">
+      <button class="emo" data-emoji-for="${p}.text" title="Add an emoji">😀</button>
+      <label class="ok"><input type="checkbox" data-bind="${p}.correct"> right</label>
+      <button class="iconx" data-del-obj="${oi}" title="Remove">✕</button>
+    </div>
+    <div class="row" style="margin-top:.45em">
+      <input type="text" placeholder="Picture URL (optional)" data-bind="${p}.image" value="${esc(o.image)}">
+      <span class="btn ghost small filebtn">Upload<input type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif" data-file="${p}.image"></span>
+      <button class="iconx" data-clear="${p}.image" title="Remove picture">✕</button>
+    </div>
+    ${PROJECT.objects.perItem ? `
+    <div class="row" style="margin-top:.45em">
+      <select data-bind="${p}.style.kind" style="flex:1">
+        <option value="">Same as everyone</option>
+        <option value="bubble">Bubble</option><option value="image">Custom image</option>
+        <option value="sticker">Sticker</option><option value="bubbleImage">Bubble with image</option>
+        <option value="card">Card</option><option value="glow">Glowing</option>
+      </select>
+      <input type="text" placeholder="Object picture URL" data-bind="${p}.style.skin" style="flex:1">
+      <span class="btn ghost small filebtn">Upload<input type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif" data-file="${p}.style.skin"></span>
+    </div>` : ""}
+  </div>`;
+}
+function renderRound(){
+  const r = curRound(), t = curTask(), ri = EDIT.ri, ti = EDIT.ti;
+  const rs = r.style || {};
+  const needShown = t.type === "category" || t.type === "mixed";
+  $("roundBox").innerHTML = `
+    <div class="sub">
+      <div class="row">
+        <input type="text" data-bind="rounds.${ri}.name" value="${esc(r.name)}" aria-label="Round name">
+        <button class="iconx" data-del-round="${ri}" title="Remove round">✕</button>
+      </div>
+      <details style="margin-top:.6em">
+        <summary class="hint" style="cursor:pointer">Objects just for this round</summary>
+        <div class="row" style="margin-top:.5em">
+          <select data-bind="rounds.${ri}.style.kind" style="flex:1">
+            <option value="">Same as the whole game</option>
+            <option value="bubble">Bubble</option><option value="image">Custom image</option>
+            <option value="sticker">Sticker</option><option value="bubbleImage">Bubble with image</option>
+            <option value="card">Card</option><option value="glow">Glowing</option>
+          </select>
+          <input type="text" placeholder="Picture URL" data-bind="rounds.${ri}.style.skin" style="flex:1"
+                 value="${esc(rs.skin || "")}">
+          <span class="btn ghost small filebtn">Upload<input type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif" data-file="rounds.${ri}.style.skin"></span>
+        </div>
+      </details>
+    </div>
+
+    <div class="chips">
+      ${r.tasks.map((x,i) => `<button data-task="${i}" class="${i===ti?"on":""}">${esc(shortQ(x))}</button>`).join("")}
+      <button class="add" data-add-task>+ Task</button>
+    </div>
+
+    <div class="sub">
+      <div class="row" style="margin-bottom:.6em">
+        <select data-bind="rounds.${ri}.tasks.${ti}.type" style="flex:1">
+          ${TASK_TYPES.map(x => `<option value="${x.key}">${x.label}</option>`).join("")}
+        </select>
+        <button class="iconx" data-del-task="${ti}" title="Remove task">✕</button>
+      </div>
+      <div class="fld"><label>Question shown on screen</label>
+        <div class="row">
+          <input type="text" data-bind="rounds.${ri}.tasks.${ti}.question" value="${esc(t.question)}">
+          <button class="emo" data-emoji-for="rounds.${ri}.tasks.${ti}.question" title="Add an emoji">😀</button>
+        </div></div>
+      ${needShown ? `<div class="fld"><label>How many right ones to pop</label>
+        <input type="number" min="1" max="30" step="1" data-bind="rounds.${ri}.tasks.${ti}.need"></div>`
+        : `<p class="hint">This type needs ${neededFor(t)} right ${neededFor(t) === 1 ? "answer" : "answers"}.</p>`}
+    </div>
+
+    <div class="sub">
+      <h4>Quick input</h4>
+      <div class="fld"><label>Right answers — one per line</label>
+        <textarea class="bulk" id="bulkRight" placeholder="cat&#10;dog&#10;horse | https://…/horse.png"></textarea></div>
+      <div class="fld"><label>Wrong answers — one per line</label>
+        <textarea class="bulk" id="bulkWrong" placeholder="chair&#10;bread&#10;spoon"></textarea></div>
+      <div class="btn-row" style="justify-content:flex-start">
+        <button class="btn ghost small" data-bulk="add">Add to this task</button>
+        <button class="btn ghost small" data-bulk="replace">Replace the answers</button>
+        <button class="btn ghost small" data-bulk="tasks">One task per line</button>
+      </div>
+      <p class="hint">Emoji work as answers on their own — type or paste them straight into a line. “word | picture URL” attaches a picture to that word. “One task per line” makes a separate task out of every right answer, sharing the wrong ones as distractors.</p>
+    </div>
+
+    <div class="sub">
+      <h4>Answers <span class="hint" style="display:inline">${t.objects.filter(o=>o.correct).length} right · ${t.objects.filter(o=>!o.correct).length} wrong</span></h4>
+      ${t.objects.map((o,oi) => objectHtml(ri,ti,oi,o)).join("")}
+      <div class="btn-row" style="justify-content:flex-start">
+        <button class="btn ghost small" data-add-obj="right">+ Right answer</button>
+        <button class="btn ghost small" data-add-obj="wrong">+ Wrong answer</button>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h4>Import from CSV or Google Sheets</h4>
+      <p class="hint" style="margin-bottom:.5em">Columns: <code>round, type, question, correct, wrong, image_url</code>.
+        Several answers in one cell go with <code>|</code>. Copying cells straight out of Google Sheets works too.</p>
+      <textarea class="bulk" id="csvText" placeholder="round,type,question,correct,wrong,image_url&#10;Animals,category,Pop the animals,cat|dog|frog,chair|bread,"></textarea>
+      <div class="btn-row" style="justify-content:flex-start;margin-top:.5em">
+        <span class="btn ghost small filebtn">Open .csv<input type="file" accept=".csv,text/csv,text/plain" id="csvFile"></span>
+        <button class="btn ghost small" id="btnCsvCheck">Check it</button>
+      </div>
+      <div id="csvPreview"></div>
+    </div>`;
+}
+const shortQ = t => (t.question || "Task").length > 22 ? t.question.slice(0,20) + "…" : (t.question || "Task");
+
+/* массовый ввод */
+function parseBulk(text){
+  return String(text || "").split("\n").map(l => l.trim()).filter(Boolean).map(line => {
+    const [word, img] = line.split("|").map(x => (x || "").trim());
+    return { text:word, image:img || "", correct:true, style:null };
+  });
+}
+function applyBulk(mode){
+  const right = parseBulk(($("bulkRight") || {}).value);
+  const wrong = parseBulk(($("bulkWrong") || {}).value).map(o => ({ ...o, correct:false }));
+  if(!right.length && !wrong.length){ toast("Type some answers first."); return; }
+  const r = curRound(), t = curTask();
+  if(mode === "tasks"){
+    if(!right.length){ toast("“One task per line” needs at least one right answer."); return; }
+    const made = right.map(o => ({
+      type: o.image ? "picture" : "word",
+      question: t.question,
+      need:1,
+      objects:[ o, ...wrong.map(w => ({ ...w })) ]
+    }));
+    r.tasks.splice(EDIT.ti + 1, 0, ...made);
+    EDIT.ti = EDIT.ti + 1;
+    toast(made.length + " tasks added");
+  }else{
+    if(mode === "replace") t.objects = [];
+    t.objects.push(...right, ...wrong);
+    t.need = neededFor(t);
+    toast(right.length + wrong.length + " answers " + (mode === "replace" ? "set" : "added"));
+  }
+  for(const task of r.tasks) task.need = neededFor(task);
+  renderRound(); syncInputs(); saveProject(); preloadImages();
+}
+
+/* ---------- CSV / Google Sheets ---------- */
+function splitRow(line, delim){
+  const out = []; let cur = "", q = false;
+  for(let i=0;i<line.length;i++){
+    const ch = line[i];
+    if(q){
+      if(ch === '"' && line[i+1] === '"'){ cur += '"'; i++; }
+      else if(ch === '"') q = false;
+      else cur += ch;
+    }else if(ch === '"') q = true;
+    else if(ch === delim){ out.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out.map(x => x.trim());
+}
+const COLS = {
+  round:["round","раунд","group","unit"],
+  type:["type","task type","тип"],
+  question:["question","task","prompt","вопрос"],
+  correct:["correct","right","answer","answers","правильный","верно"],
+  wrong:["wrong","incorrect","distractor","distractors","неверно"],
+  image:["image_url","image","picture","img","картинка"]
+};
+function parseTable(text){
+  const lines = String(text || "").replace(/\r/g,"").split("\n").filter(l => l.trim());
+  if(!lines.length) return { rows:[], errors:["Nothing to import."], map:null };
+  const delim = lines[0].includes("\t") ? "\t" : (lines[0].split(";").length > lines[0].split(",").length ? ";" : ",");
+  const head = splitRow(lines[0], delim).map(h => h.toLowerCase());
+  const map = {};
+  for(const key in COLS){
+    const i = head.findIndex(h => COLS[key].includes(h));
+    if(i >= 0) map[key] = i;
+  }
+  const hasHeader = map.correct != null || map.question != null;
+  const body = hasHeader ? lines.slice(1) : lines;
+  if(!hasHeader){ map.question = 0; map.correct = 1; map.wrong = 2; map.image = 3; }
+  const split = v => String(v || "").split(/[|;]/).map(x => x.trim()).filter(Boolean);
+  const rows = [], errors = [];
+  body.forEach((line, i) => {
+    const cells = splitRow(line, delim);
+    const get = k => map[k] == null ? "" : (cells[map[k]] || "");
+    const correct = split(get("correct")), wrong = split(get("wrong"));
+    const image = get("image");
+    const question = get("question") || "Pop the right one";
+    let type = get("type").toLowerCase();
+    if(!TASK_TYPES.some(t => t.key === type))
+      type = correct.length > 1 ? "category" : (image ? "picture" : "word");
+    const row = { round:get("round") || "Imported", type, question, correct, wrong, image,
+                  line:i + (hasHeader ? 2 : 1), problem:"" };
+    if(!correct.length) row.problem = "no right answer";
+    else if(!wrong.length && correct.length < 2) row.problem = "no wrong answers to choose from";
+    if(row.problem && !correct.length) errors.push(`Line ${row.line}: no right answer — skipped`);
+    rows.push(row);
+  });
+  return { rows, errors, map, hasHeader };
+}
+function renderCsvPreview(res){
+  const good = res.rows.filter(r => r.correct.length);
+  $("csvPreview").innerHTML = `
+    <p class="hint" style="margin-top:.7em">${good.length} of ${res.rows.length} lines ready${res.hasHeader ? "" : " (no header row found — read as question, correct, wrong, image)"}.</p>
+    ${res.errors.length ? `<p class="hint bad">${res.errors.slice(0,6).map(esc).join("<br>")}</p>` : ""}
+    <table class="tbl"><tr><th>Round</th><th>Type</th><th>Question</th><th>Right</th><th>Wrong</th><th></th></tr>
+      ${res.rows.slice(0,8).map(r => `<tr>
+        <td>${esc(r.round)}</td><td>${esc(r.type)}</td><td>${esc(r.question)}</td>
+        <td>${r.correct.length}</td><td>${r.wrong.length}</td>
+        <td class="${r.correct.length ? "good" : "bad"}">${r.correct.length ? (r.problem || "ok") : "skipped"}</td></tr>`).join("")}
+    </table>
+    ${res.rows.length > 8 ? `<p class="hint">…and ${res.rows.length - 8} more lines.</p>` : ""}
+    <div class="btn-row" style="justify-content:flex-start;margin-top:.6em">
+      <button class="btn small" data-csv="add" ${good.length ? "" : "disabled"}>Add as new rounds</button>
+      <button class="btn ghost small" data-csv="replace" ${good.length ? "" : "disabled"}>Replace everything</button>
+    </div>`;
+}
+function applyCsv(mode){
+  const res = EDIT.csv; if(!res) return;
+  const byRound = new Map();
+  for(const r of res.rows){
+    if(!r.correct.length) continue;
+    if(!byRound.has(r.round)) byRound.set(r.round, []);
+    byRound.get(r.round).push({
+      type:r.type, question:r.question, need:1,
+      objects:[
+        ...r.correct.map((t,i) => ({ text:t, image:(i === 0 ? r.image : "") || "", correct:true, style:null })),
+        ...r.wrong.map(t => ({ text:t, image:"", correct:false, style:null }))
+      ]
+    });
+  }
+  if(!byRound.size){ toast("Nothing could be imported."); return; }
+  const made = [...byRound].map(([name, tasks]) => {
+    tasks.forEach(t => t.need = neededFor(t));
+    return { name, style:null, tasks };
+  });
+  if(mode === "replace") PROJECT.rounds = made;
+  else PROJECT.rounds.push(...made);
+  EDIT.ri = mode === "replace" ? 0 : PROJECT.rounds.length - made.length;
+  EDIT.ti = 0; EDIT.csv = null;
+  renderEditor(); saveProject(); preloadImages();
+  toast(`${made.length} rounds, ${made.reduce((n,r) => n + r.tasks.length, 0)} tasks imported`);
+}
+
+/* ---------- AUDIO & EFFECTS ---------- */
+function renderAudio(){
+  $("audioBox").innerHTML = SOUND_EVENTS.map(ev => {
+    const p = `audio.${ev.key}`;
+    return `<div class="sub">
+      <h4>${ev.label}</h4>
+      <label class="switchrow"><input type="checkbox" data-bind="${p}.on"> Play this sound</label>
+      <div class="fld"><label>Source</label>
+        <select data-bind="${p}.mode" data-rerender="audio">
+          <option value="builtin">Built-in</option><option value="custom">My file or URL</option>
+        </select></div>
+      ${PROJECT.audio[ev.key].mode === "builtin" ? `
+      <div class="fld"><label>Which one</label>
+        <select data-bind="${p}.builtin">
+          ${ev.builtins.map(b => `<option value="${b}">${b.replace(/-/g," ")}</option>`).join("")}
+        </select></div>` : `
+      <div class="fld"><label>File or URL${PROJECT.audio[ev.key].name ? " — " + esc(PROJECT.audio[ev.key].name) : ""}</label>
+        <div class="row">
+          <input type="text" placeholder="https://… .mp3" data-bind="${p}.src">
+          <span class="btn ghost small filebtn">Upload<input type="file" accept="audio/*"
+                data-file="${p}.src" data-audio="${ev.key}"></span>
+          <button class="iconx" data-clear="${p}.src" title="Remove">✕</button>
+        </div></div>`}
+      <div class="fld"><label>Volume <span data-out="${p}.volume"></span></label>
+        <input type="range" min="0" max="1" step=".05" data-bind="${p}.volume"></div>
+      <button class="btn ghost small" data-preview-sound="${ev.key}">Play it</button>
+    </div>`;
+  }).join("");
+}
+function renderEffects(){
+  $("effectsBox").innerHTML = ["victory","gameover"].map(key => {
+    const p = `effects.${key}`;
+    return `<div class="sub">
+      <h4>${key === "victory" ? "When the player wins" : "When the game is lost"}</h4>
+      <div class="fld"><label>Effects (tap to pick, order is kept)</label>
+        <div class="chips">
+          ${EFFECT_TYPES.map(t => `<button data-fx="${p}.types" data-val="${t.key}">${t.label}</button>`).join("")}
+        </div></div>
+      <div class="fld"><label>Intensity <span data-out="${p}.intensity"></span></label>
+        <input type="range" min="1" max="5" step="1" data-bind="${p}.intensity"></div>
+      <div class="fld"><label>Duration <span data-out="${p}.duration"></span> s</label>
+        <input type="range" min=".5" max="10" step=".5" data-bind="${p}.duration"></div>
+      <button class="btn ghost small" data-preview-fx="${key}">Preview</button>
+    </div>`;
+  }).join("");
+}
+function renderEditor(){
+  const sel = $("fontSel");
+  if(sel && !sel.options.length)
+    sel.innerHTML = FONTS.map(f => `<option value="${f}">${f}</option>`).join("");
+  renderRoundsBar(); renderRound(); renderAudio(); renderEffects(); syncInputs();
+}
+
+/* ---------- клики по редактору ---------- */
+editor.addEventListener("click", e => {
+  const t = e.target.closest("[data-round],[data-add-round],[data-del-round],[data-task],[data-add-task],"
+    + "[data-del-task],[data-add-obj],[data-del-obj],[data-clear],[data-fx],[data-bulk],[data-csv],"
+    + "[data-reset],[data-emoji-for],[data-preview-sound],[data-preview-fx]");
+  if(!t) return;
+  const d = t.dataset;
+  if(d.round != null){ EDIT.ri = +d.round; EDIT.ti = 0; renderRoundsBar(); renderRound(); syncInputs(); return; }
+  if("addRound" in d){
+    PROJECT.rounds.push({ name:"Round " + (PROJECT.rounds.length+1), style:null,
+      tasks:[{ type:"word", question:"Pop the right one", need:1,
+        objects:[{text:"right one",image:"",correct:true,style:null},
+                 {text:"wrong one",image:"",correct:false,style:null}] }] });
+    EDIT.ri = PROJECT.rounds.length-1; EDIT.ti = 0;
+    renderRoundsBar(); renderRound(); syncInputs(); saveProject(); return;
+  }
+  if(d.delRound != null){
+    if(PROJECT.rounds.length <= 1){ toast("Keep at least one round."); return; }
+    const r0 = PROJECT.rounds[+d.delRound];
+    if(!ask(`Remove the round “${r0.name}” with its ${r0.tasks.length} task(s)?`)) return;
+    PROJECT.rounds.splice(+d.delRound,1); EDIT.ri = 0; EDIT.ti = 0;
+    renderRoundsBar(); renderRound(); syncInputs(); saveProject(); return;
+  }
+  if(d.task != null){ EDIT.ti = +d.task; renderRound(); syncInputs(); return; }
+  if("addTask" in d){
+    const r = curRound();
+    r.tasks.push({ type:"word", question:"Pop the right one", need:1,
+      objects:[{text:"right one",image:"",correct:true,style:null},
+               {text:"wrong one",image:"",correct:false,style:null}] });
+    EDIT.ti = r.tasks.length-1; renderRound(); syncInputs(); saveProject(); return;
+  }
+  if(d.delTask != null){
+    const r = curRound();
+    if(r.tasks.length <= 1){ toast("A round needs at least one task."); return; }
+    if(!ask("Remove this task and its answers?")) return;
+    r.tasks.splice(+d.delTask,1); EDIT.ti = 0; renderRound(); syncInputs(); saveProject(); return;
+  }
+  if(d.addObj){
+    const t2 = curTask();
+    t2.objects.push({ text:"", image:"", correct:d.addObj === "right", style:null });
+    t2.need = neededFor(t2); renderRound(); syncInputs(); saveProject(); return;
+  }
+  if(d.delObj != null){
+    const t2 = curTask();
+    if(t2.objects.length <= 2){ toast("A task needs at least two answers."); return; }
+    t2.objects.splice(+d.delObj,1); t2.need = neededFor(t2);
+    renderRound(); syncInputs(); saveProject(); return;
+  }
+  if(d.reset){
+    const label = { game:"gameplay settings", objects:"object settings", audio:"sounds", effects:"end effects" }[d.reset];
+    if(!ask(`Reset the ${label} to the defaults?`)) return;
+    PROJECT[d.reset] = JSON.parse(JSON.stringify(defaultProject()[d.reset]));
+    renderEditor(); saveProject(); toast("Reset: " + label); return;
+  }
+  if(d.clear){
+    setPath(PROJECT, d.clear, d.clear === "game.lifeIcon" ? "❤️" : "");
+    renderRound(); renderAudio(); syncInputs(); saveProject(); return;
+  }
+  if(d.fx){
+    const list = getPath(PROJECT, d.fx) || [];
+    const i = list.indexOf(d.val);
+    i >= 0 ? list.splice(i,1) : list.push(d.val);
+    setPath(PROJECT, d.fx, list); syncInputs(); saveProject(); return;
+  }
+  if(d.emojiFor){ openEmoji(t, d.emojiFor); return; }
+  if(d.bulk){
+    if(d.bulk === "replace" && !ask("Replace every answer in this task?")) return;
+    applyBulk(d.bulk); return;
+  }
+  if(d.csv){
+    if(d.csv === "replace" && !ask("Replace the whole project with the imported rounds?")) return;
+    applyCsv(d.csv); return;
+  }
+  if(d.previewSound){ initAudio(); playSound(d.previewSound); return; }
+  if(d.previewFx){
+    fxCanvas.classList.add("above");     // иначе анимация идёт за панелью редактора
+    playEffects(PROJECT.effects[d.previewFx]);
+    return;
+  }
+});
+$("edNav").addEventListener("click", e => {
+  const b = e.target.closest("button[data-sec]"); if(!b) return;
+  EDIT.sec = b.dataset.sec;
+  $("edNav").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  edPanes.querySelectorAll(".pane").forEach(p => p.hidden = p.dataset.pane !== EDIT.sec);
+  syncInputs();
+});
+edPanes.addEventListener("click", e => {
+  if(e.target.id === "btnCsvCheck"){
+    EDIT.csv = parseTable(($("csvText") || {}).value);
+    renderCsvPreview(EDIT.csv);
+  }
+});
+edPanes.addEventListener("change", e => {
+  if(e.target.id === "csvFile" && e.target.files[0]){
+    const fr = new FileReader();
+    fr.onload = () => { $("csvText").value = fr.result; EDIT.csv = parseTable(fr.result); renderCsvPreview(EDIT.csv); };
+    fr.readAsText(e.target.files[0]); e.target.value = "";
+  }
+});
+
+/* ---------- ЖИВОЙ ПРЕДПРОСМОТР ---------- */
+const PV = { objs:[], w:0, h:0 };
+function pvRebuild(){
+  if(editor.hidden) return;
+  const cv = $("livePreview"); if(!cv) return;
+  const t = curTask(), r = curRound();
+  $("pvQuestion").textContent = t.question || "—";
+  $("pvNote").textContent = `${t.objects.filter(o=>o.correct).length} right answers · pop ${neededFor(t)} to finish · ${TASK_TYPES.find(x=>x.key===t.type).label.toLowerCase()}`;
+  const w = cv.clientWidth || 320, h = cv.clientHeight || 220;
+  PV.w = w; PV.h = h;
+  const picks = [...t.objects.filter(o => o.correct).slice(0,3), ...t.objects.filter(o => !o.correct).slice(0,3)];
+  const horiz = PROJECT.game.direction === "left" || PROJECT.game.direction === "right";
+  const spd = (PROJECT.game.speed * .12 + .1);
+  PV.objs = picks.map((item, i) => {
+    const style = styleOf(item, r);
+    const rad = Math.min(w,h) * .15 * PROJECT.game.sizeScale * (style.scale || 1);
+    const b = { item, style, r:rad, hw:rad, hh:rad, shape:"circle", skinImg:null,
+      x: w * (.16 + .68 * ((i % 3) / 2)), y: h * (i < 3 ? .3 : .72),
+      vx: horiz ? (PROJECT.game.direction === "right" ? spd : -spd) : 0,
+      vy: horiz ? 0 : (PROJECT.game.direction === "down" ? spd : -spd),
+      hue: item.correct ? 182 : 206, contact:0, popping:0, phase:i };
+    measure(b); return b;
+  });
+}
+function pvStep(dt){
+  if(editor.hidden) return;
+  const cv = $("livePreview"); if(!cv) return;
+  const w = cv.clientWidth || 320, h = cv.clientHeight || 220;
+  if(Math.abs(w - PV.w) > 2 || Math.abs(h - PV.h) > 2) pvRebuild();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if(cv.width !== Math.round(w*dpr) || cv.height !== Math.round(h*dpr)){
+    cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+  }
+  const c = cv.getContext("2d");
+  c.setTransform(dpr,0,0,dpr,0,0);
+  c.clearRect(0,0,w,h);
+  const f = dt/16.67;
+  for(const b of PV.objs){
+    measure(b);
+    b.phase += .03*f;
+    b.x += b.vx*f + (b.vx ? 0 : Math.sin(b.phase)*.3*f);
+    b.y += b.vy*f + (b.vy ? 0 : Math.sin(b.phase)*.3*f);
+    const m = Math.max(b.hw,b.hh) + 6;
+    if(b.x < -m) b.x = w + m; if(b.x > w + m) b.x = -m;
+    if(b.y < -m) b.y = h + m; if(b.y > h + m) b.y = -m;
+    drawObject(c, b);
+  }
+}
+
+/* ==========================================================================
+   N. КНОПКИ И СТАРТ
+   В выгруженной игре редактора нет, поэтому привязки должны переживать
+   отсутствие элемента, а не ронять весь скрипт.
+   ========================================================================== */
+const on = (id, ev, fn) => { const el = $(id); if(el) el.addEventListener(ev, fn); };
+on("btnStartCam", "click", async e => {
+  const btn = e.currentTarget; btn.disabled = true;
+  initAudio();
+  if(!window.isSecureContext){
+    say("The camera needs HTTPS. Open this page over https:// or on localhost.", true);
+    btn.disabled = false; return;
+  }
+  try{
+    say("Asking for the camera…");
+    await openCamera();
+    say("Loading hand tracking… (first time takes a few seconds)");
+    status.insertAdjacentHTML("beforebegin", '<div class="spinner" id="spin"></div>');
+    await loadModel();
+    const sp = $("spin"); if(sp) sp.remove();
+    say(""); startGame("hands");
+  }catch(err){
+    const sp = $("spin"); if(sp) sp.remove();
+    console.error(err); closeCamera(); say(cameraError(err), true);
+  }finally{ btn.disabled = false; }
+});
+on("btnStartMouse", "click", () => startGame("pointer"));
+on("btnSetup", "click", openEditor);
+on("btnCloseEditor", "click", closeEditor);
+on("btnPreviewTop", "click", () => startGame(stream && handLandmarker ? "hands" : "pointer"));
+on("btnTestHands", "click", async () => {
+  closeEditor();
+  if(stream && handLandmarker){ startGame("hands"); return; }
+  showScreen("menu"); const sc = $("btnStartCam"); if(sc) sc.click();
+});
+on("btnTestMouse", "click", () => startGame("pointer"));
+on("btnSaveTop", "click", () => $("btnSaveProject").click());
+on("btnExportTop", "click", () => {
+  EDIT.sec = "export";
+  $("edNav").querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.sec === "export"));
+  edPanes.querySelectorAll(".pane").forEach(p => p.hidden = p.dataset.pane !== "export");
+  syncInputs();
+});
+
+/* ---------- сохранение, загрузка, экспорт ---------- */
+function download(name, text, type){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+const safeName = () => (PROJECT.name || "bubble-cam").replace(/[^\w\-]+/g, "-").toLowerCase();
+on("btnSaveProject", "click", () => {
+  download(safeName() + ".json", JSON.stringify(PROJECT, null, 2), "application/json");
+  dirty = false; setSaveState("Saved to a file");
+  toast("Project saved");
+});
+function loadProjectFrom(input){
+  const file = input.files && input.files[0]; if(!file) return;
+  if(!confirmLoss("Loading another project drops the changes you have not saved. Continue?")){ input.value = ""; return; }
+  const fr = new FileReader();
+  fr.onload = () => {
+    try{
+      const raw = JSON.parse(fr.result);
+      validateProject(raw);
+      PROJECT = normalize(raw);
+      EDIT.ri = 0; EDIT.ti = 0; EDIT.csv = null;
+      preloadImages(); renderEditor(); saveProject();
+      toast(`Loaded “${PROJECT.name}” — ${PROJECT.rounds.length} rounds`);
+      dirty = false; setSaveState("Saved");
+    }catch(err){ toast("That file could not be used: " + err.message); setSaveState("Load failed", false); }
+  };
+  fr.readAsText(file); input.value = "";
+}
+on("loadProjectFile", "change", e => loadProjectFrom(e.target));
+on("loadProjectFile2", "change", e => loadProjectFrom(e.target));
+on("btnResetProject", "click", () => {
+  if(!confirmLoss("Going back to the demo drops your unsaved changes. Continue?")) return;
+  PROJECT = normalize(null); EDIT.ri = 0; EDIT.ti = 0;
+  preloadImages(); renderEditor(); saveProject(); toast("Back to the demo rounds");
+});
+on("btnNewProject", "click", () => {
+  if(!confirmLoss("Starting a new project drops the changes you have not saved. Continue?")) return;
+  PROJECT = normalize({ name:"New game", rounds:[{ name:"Round 1", tasks:[{
+    type:"word", question:"Pop the right one", need:1,
+    objects:[{text:"right one",correct:true},{text:"wrong one",correct:false}] }] }] });
+  EDIT.ri = 0; EDIT.ti = 0; EDIT.csv = null;
+  renderEditor(); saveProject(); toast("New project started");
+});
+on("btnDuplicate", "click", () => {
+  PROJECT = normalize(JSON.parse(JSON.stringify(PROJECT)));
+  PROJECT.name = (PROJECT.name || "Bubble Cam") + " copy";
+  EDIT.csv = null; renderEditor(); saveProject();
+  toast("Working on a copy — save it under the new name");
+});
+window.addEventListener("beforeunload", e => {
+  if(dirty && !PLAY_MODE){ e.preventDefault(); e.returnValue = ""; }
+});
+
+/* экспорт: тот же документ, но с вшитым проектом и без редактора */
+function buildExportedGameHtml(){
+  const root = document.documentElement.cloneNode(true);
+  root.setAttribute("data-mode", "play");
+  const ed = root.querySelector("#editor"); if(ed) ed.hidden = true;
+  const setup = root.querySelector("#btnSetup"); if(setup && setup.parentElement) setup.parentElement.remove();
+  const spin = root.querySelector("#spin"); if(spin) spin.remove();
+  const gifs = root.querySelector("#gifHolder"); if(gifs) gifs.remove();
+  const st = root.querySelector("#status"); if(st){ st.textContent = ""; st.className = ""; }
+  const hudEl = root.querySelector("#hud"); if(hudEl) hudEl.hidden = true;
+  root.querySelectorAll(".screen").forEach(el => { el.hidden = el.id !== "menuScreen"; });
+  const title = root.querySelector("title"); if(title) title.textContent = PROJECT.name || "Bubble Cam";
+  const old = root.querySelector("#bubbleCamProject"); if(old) old.remove();
+  const cfg = document.createElement("script");
+  cfg.type = "application/json"; cfg.id = "bubbleCamProject";
+  cfg.textContent = JSON.stringify(PROJECT).replace(/<\//g, "<\\/");
+  root.querySelector("body").appendChild(cfg);
+  return "<!doctype html>\n" + root.outerHTML;
+}
+on("btnExportGame", "click", () => {
+  const html = buildExportedGameHtml();
+  download(safeName() + "-game.html", html, "text/html");
+  const mb = (html.length / 1048576).toFixed(1);
+  toast(`Game exported (${mb} MB). Upload it over https so the camera can work.`);
+});
+on("btnCopyIframe", "click", async () => {
+  const url = (PROJECT.gameUrl || "").trim();
+  if(!url){ toast("Put the web address of the uploaded game file in the box first."); return; }
+  const code = `<iframe src="${url}" width="100%" height="640" style="border:0"\n`
+             + `        allow="camera; microphone; fullscreen" allowfullscreen></iframe>`;
+  try{ await navigator.clipboard.writeText(code); toast("Iframe code copied"); }
+  catch(e){
+    const ta = document.createElement("textarea");
+    ta.value = code; document.body.appendChild(ta); ta.select();
+    try{ document.execCommand("copy"); toast("Iframe code copied"); }
+    catch(e2){ toast("Copy did not work — the code is in the console."); console.log(code); }
+    ta.remove();
+  }
+});
+on("btnPause", "click", pauseGame);
+on("btnResume", "click", resumeGame);
+on("btnQuit", "click", toMenu);
+on("btnExit", "click", toMenu);
+on("btnMenu", "click", toMenu);
+on("btnAgain", "click", () => startGame(G.mode));
+on("btnFull", "click", () => {
+  if(document.fullscreenElement) document.exitFullscreen();
+  else stage.requestFullscreen && stage.requestFullscreen().catch(()=>{});
+});
+document.addEventListener("keydown", e => {
+  if(e.key === "Escape" && G.phase === "playing") pauseGame();
+  if(e.key === " " && (G.phase === "playing" || G.phase === "paused")){
+    e.preventDefault(); G.phase === "playing" ? pauseGame() : resumeGame();
+  }
+});
+document.addEventListener("visibilitychange", () => { if(document.hidden) pauseGame(); });
+window.addEventListener("pagehide", closeCamera);
+
+(function fonts(){
+  const l = document.createElement("link"); l.rel = "stylesheet";
+  l.href = "https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Nunito:wght@400;600;700&display=swap";
+  document.head.appendChild(l);
+})();
+
+const embedded = document.getElementById("bubbleCamProject");
+if(embedded){
+  try{ PROJECT = normalize(JSON.parse(embedded.textContent)); }
+  catch(e){ console.error("embedded project could not be read", e); }
+}
+if(PLAY_MODE){
+  const b = $("btnSetup"); if(b && b.parentElement) b.parentElement.remove();
+  editor.hidden = true;
+}
+preloadImages();
+resize();
+requestAnimationFrame(loop);
+
+/* отладочный хук — пригодится для проверочных скриптов, игре не мешает */
+window.__bubbleCam = { get PROJECT(){ return PROJECT; }, G, EDIT, startGame, playEffects, playSound,
+  normalize, neededFor, FX, pointers, openEditor, closeEditor, renderEditor, parseTable, applyCsv,
+  buildExportedGameHtml, PV };
+</script>
+
+
+<script type="application/json" id="bubbleCamProject">{"version":3,"name":"My Bubble Cam game","game":{"maxObjects":6,"speed":2,"sizeScale":1,"contactMs":140,"popCooldown":220,"direction":"up","bounce":false,"vignette":0.25,"input":"touch","showPointer":true,"showCamera":true,"lifeIcon":"❤️","showPause":true,"showFullscreen":true,"timerOn":false,"timerSeconds":90,"livesOn":true,"lives":5,"pointsRight":10,"pointsWrong":5,"twoHands":true,"randomOrder":false,"smoothing":0.45},"objects":{"perItem":false,"style":{"kind":"glow","skin":"","scale":1,"opacity":1,"outline":2,"glow":0,"color":"#CFFAFF","textColor":"#ffffff","fontScale":1,"textPlace":"inside","faceDirection":false,"fontFamily":"Baloo 2","bold":true,"textOutline":true,"textShadow":false,"textAlign":"center","autoFit":true,"hideText":false,"hitShape":"auto","hitScale":1}},"audio":{"pop":{"on":true,"volume":0.8,"mode":"builtin","builtin":"pop-soft","src":"","name":""},"correct":{"on":true,"volume":0.8,"mode":"builtin","builtin":"chime","src":"","name":""},"wrong":{"on":true,"volume":0.8,"mode":"builtin","builtin":"buzz","src":"","name":""},"life":{"on":false,"volume":0.8,"mode":"builtin","builtin":"thud","src":"","name":""},"countdown":{"on":true,"volume":0.8,"mode":"builtin","builtin":"tick","src":"","name":""},"victory":{"on":true,"volume":0.8,"mode":"builtin","builtin":"fanfare","src":"","name":""},"gameover":{"on":true,"volume":0.8,"mode":"builtin","builtin":"descend","src":"","name":""}},"effects":{"victory":{"types":["confetti","stars"],"intensity":3,"duration":3},"gameover":{"types":["rain"],"intensity":3,"duration":3}},"rounds":[{"name":"\"SAT\" words","style":null,"tasks":[{"type":"category","question":"Pop the words with a sound \"Ss\"","need":8,"objects":[{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdDljMzNpa2sweXk1OWw0a2FxbjYxYXVpYm92Z2Vpd2N3OHE1djZqMCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/l17M5uvfc1VosGUUP0/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3NzlzcWp4a3g0NWlwbTFzaml2dHJwMWZ1NTh6bGM0N3htem9ibHNjbSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/0bQtf6nQTm1AZsCOyI/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dTdob2MxcHFqZTFwYjIxempkOHo0a2dtOG1sOHRsd2I2cGc5eWlzaiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/Zz1urOC9mBHJUrvvvE/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3Z3hpc2ZnYjlsa3RlNDQ0bnU5MWhvZHJkZDZtZWFqODRlNzA5Y2tlOSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/USJkxLSBlpTk0OH0qs/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExeXhhZWM2MHBmYXFqZHJtN3M5cHhkMGUyZ2kxZTF6Ynliam56NTRzZCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/3o7WILflbm2MrOfNRu/giphy.gif","correct":true,"style":null},{"text":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExZmp4bGg4bTJobmg3cHFnOWdrY2U4bHM2dmo4cGVkZDNwNjU1bmUwMSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/NXfC1X8NjSzDBxqNCz/giphy.gif","image":"","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdG12NmsyZTh0c2FtdWF3em42aDUzd2h4dG0waWtsN29iMjgybHdoZSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/ZA53KsgcPf4bRt8iT4/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExenA5MmJ3aTFhNWV0M2p1dW11NHZ3b2xpZ2FreWFnb2Y5bzl1MmduOCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/jnWXkNRl5slLTmZmkT/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExanhjOG5xZWMyajZsYnBobWk2bTQ0b2FsY2F5dnludnkwOG5sanN0YiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/PhhsYAnOL6GUBEGPKQ/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcG55c2R0eDR5ZzhudHlsOTN6cTY4bW5pc3hrbGM1MDg0dnB4aDhpZCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/ggpoVsIg0LwtHfTBEY/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExYnBreXd5dGQ1a2x0NDgzMm1leXlsYzNyYmRvYTVyY3Y2ZXd3N3pzMiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/UN2IJoaRjKfyQnrNBo/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3eXQ1cnR1ajJqZmVteDhvaTAxaWdkZmQyNXQ4YmgzcHNibmI0M2oycyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/ZQmTJ0Wxv9Amc2I8Hx/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExMDR5OHB3dHBmN2J3eDJjYmQ0eWlvb2NtdmZ1MHFjbmh5Zm5mcWY0cyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/GopjlKrzukpCVWcT1J/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOGl6dWNvcmVyazRtb3JxbWp5b2dhbjJ0dm0wOG92NmlhZjJobXhsMCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/uyiO3WeJHGoL73Mdy1/giphy.gif","correct":false,"style":null}]},{"type":"category","question":"Pop the words with a sound \"Aa\"","need":8,"objects":[{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOGl6dWNvcmVyazRtb3JxbWp5b2dhbjJ0dm0wOG92NmlhZjJobXhsMCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/4WpTmWhgudGUmZnfQ8/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExenNmMGRrZHV5c3FqMmxqZm1oMDdreDU0dDJrZnQwZzd1M2tsNDZtcyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/zCfS2BwGVTNCNhFN7A/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM2M0YTV6cWVyN3gzazl2b3huMmI3amhoZHRqc3g3NWxzY2l4ZXp3ZyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/IbHjdtojXWIEzP5bdb/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdTFyNzRwNWI4bGpud283bWwzbDl3NzM2OHJ4YWsyb2R1eno1eWV6YiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/Q1ppUMPH2smB2PXNK2/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNTN4cGo2ZG56YWtvejI2amF5dGVpNHdrY3hsaWY0YzlqbG5zYnd1NiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/kimWBtJDjWcwFH2nRB/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM2VjNHJ3bHJzOHpraTJjZ3BlaDQ4cjRmYXY3MGh1YXhlbnF1cmFuYSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/py6rPBoXR96G7sMUFE/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOXFkcXRtd2pnbGI1bWVjNW1ycHBzNXM1ZjNvYXh0YzA3aGkzYzBwdyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/1fFXBBz7HC6kxYnfNJ/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcWltZWFjb2MxNThma3J0MDFkcm1nenMxeXY3a3BpenEyb29pZmdpciZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/aNfRDYc7RDe5iSqD70/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3amc1bHhiOGVpdjIya3FteGt3OXBxdGM0NDdobDhqeGdwbzM0M20yciZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/47sx8GQNnOvfFj18TW/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExamUxbmIwYXl3dHE5Zm13aHc5NndjNXo3bWpha3dpdHp6cXI5bDdqMiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/RCbCPwuGOpAUkq7dQm/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExY3FzcWIya2JueGt0dnNzYzFoNWx0Y240MGZ2b2RvYXVrdHlybXd1ZSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/l3OHnIrlcguTO5zAPX/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNmdsMnRiZm9ub3RqbHAyMXd6Mjc4c3l6bm1mdHdzYXlweW04OG83OCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/NsB5r2iNSgiwsk4d5R/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExeXFhbmQyaDNibWxkaW81NDdxMms5dTFndWVoZHpvbW5rdGpjaHB3byZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/ZCNKNsiPMOo5jr0pBd/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3Z2N4dzh0cHJ2bGFwNzdtNnNsMTUwNmlvNXVpY2dqbjRvZTBoZ295ZyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/N1BtB8kzOjOt4Bfwa9/giphy.gif","correct":false,"style":null}]},{"type":"category","question":"Pop the words with a sound \"Tt\"","need":2,"objects":[{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExb3dyZmIyNzlzaWJpOHp2d2FzMXY0c2I2MmFvNmczbWRqY3J1aXU5dyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/UN2IJoaRjKfyQnrNBo/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3Z2N4dzh0cHJ2bGFwNzdtNnNsMTUwNmlvNXVpY2dqbjRvZTBoZ295ZyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/N1BtB8kzOjOt4Bfwa9/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExY3FzcWIya2JueGt0dnNzYzFoNWx0Y240MGZ2b2RvYXVrdHlybXd1ZSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/l3OHnIrlcguTO5zAPX/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3b3UyZmlnNjV6OTF6NDQxbG51bHFqdG13cnNzYTVmem5ueDd0b3Y3ayZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/aWlzWbuTJfAhx5oUdv/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExN25scm5neDQzNTc2YTY0a3Q0enZ6empvcXVvOGZ2cjdqNGUydXZ3OCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9dHM/jrADhdghPV1ceZMLeP/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcnFnOWlpMTBmNHRxZmM0anJpaWtrN2g2OHJ0ZWxlNzdjZHI1azJveiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/uWzYKSRpgkWKfoSbmX/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdHdjbG12a2ltdGRpcjE2ZHR4bnhwZDMxb3drN3J5ZTRueHZxZDh2bSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/Me15dPbub4gXFVlrky/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dTY4b2s3d3cwaTJlZXUwMDd3dzV1Y3l6ODB5Zmg2cDJsbTR4aDlyNCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9dHM/D6gg596Drmy306SWAR/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dHI5MmVsaHZmaHJ1MGJhbnlweDFsZmRsbHFqb3dvMjl3a3Vtem9hciZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/jmwMP89EQVVIIgy50G/giphy.gif","correct":true,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExZDIwZ3g4OXNocjIzOWdlNGszOGM1YzU3aDkzeXF6bmlodHdnbmVjcCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/PhhsYAnOL6GUBEGPKQ/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExZWVvODYxNzg4bmljc3NzZWZvZG9mMnl5Mnd2bnNmbGEwZzdhb3l3dSZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/Twh6gTAd73n0uoMT5p/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExaDJzMGJ1ZmJuZHA1enZ6cnhibzJwMmx6eDY1cjBrendodGJyN2FmdCZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/cg0Mj2BfvyllurKzAU/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3YThtaHJhdTB1N3ZtYzhzYXAwenB6d3BrdG91NjlqZ2wxajVtamswYyZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/3og0IPHf96jeflSpsk/giphy.gif","correct":false,"style":null},{"text":"","image":"https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExaG12bXZ3OXZ3Nmw0bTU5eDU3ZXJmMndvY2d2dTYzbDNibXB5NHc3ZiZlcD12MV9zdGlja2Vyc19zZWFyY2gmY3Q9cw/ta0iURQvA8BBerG3XZ/giphy.gif","correct":false,"style":null}]}]}]}</script></body></html>
